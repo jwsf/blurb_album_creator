@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
 Image Batcher - Manages batches of images from date-organized folders.
-Batches are 1-5 images each, never spanning multiple date folders or locations.
+Batches are 1-6 images each, never spanning multiple date folders or locations.
+
+When no date folders are found, falls back to flat-directory mode:
+shuffles all images and splits into random batches of 1 to max_batch_size.
 
 Features:
 - Enhanced metadata extraction (location hierarchy, captions, date validation)
 - Location-aware single-image date batching
 - Orientation-aware batching
+- Flat-directory fallback with random batch sizes
 - Configurable batch sizes and strategies
 - Comprehensive reporting and validation
 """
@@ -15,6 +19,7 @@ import os
 import sys
 import json
 import re
+import random
 import subprocess
 import argparse
 from pathlib import Path
@@ -27,13 +32,13 @@ SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.heic', '.tiff', '.tif'}
 DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}')
 
 class ImageBatcher:
-    def __init__(self, min_batch_size: int = 1, max_batch_size: int = 5,
+    def __init__(self, min_batch_size: int = 1, max_batch_size: int = 6,
                  combine_singles: bool = True, prefer_large: bool = True):
         """Initialize ImageBatcher with configuration options.
 
         Args:
             min_batch_size: Minimum batch size (default 1)
-            max_batch_size: Maximum batch size (default 5)
+            max_batch_size: Maximum batch size (default 6)
             combine_singles: Whether to combine single-image dates (default True)
             prefer_large: Whether to prefer larger batches (default True)
         """
@@ -85,6 +90,15 @@ class ImageBatcher:
                 images.append(str(file))
 
         return images
+
+    def find_images_recursive(self, directory: str) -> List[str]:
+        """Find all supported images in a directory recursively."""
+        images = []
+        for root, dirs, files in os.walk(directory):
+            for f in sorted(files):
+                if Path(f).suffix.lower() in SUPPORTED_EXTENSIONS:
+                    images.append(os.path.join(root, f))
+        return sorted(images)
 
     def get_image_metadata(self, image_paths: List[str]) -> Dict[str, Dict]:
         """Extract metadata from multiple images in batch using exiftool.
@@ -283,14 +297,9 @@ class ImageBatcher:
 
         if not date_folders:
             print("No date folders found (folders starting with YYYY-MM-DD pattern)")
+            print("Falling back to flat-directory mode: scanning all images recursively")
             print()
-            self.state = {
-                "source_directory": directory,
-                "current_batch_index": 0,
-                "total_batches": 0,
-                "batches": []
-            }
-            self.save_state()
+            self._scan_flat_directory(directory)
             return
 
         print(f"Found {len(date_folders)} date folders")
@@ -556,6 +565,87 @@ class ImageBatcher:
         print("=" * 60)
         print()
 
+    def _scan_flat_directory(self, directory: str):
+        """Fallback: scan a flat directory with no date folders.
+
+        Finds all images recursively, shuffles them, and splits into
+        random-sized batches of 1 to max_batch_size.
+        """
+        all_images = self.find_images_recursive(directory)
+
+        if not all_images:
+            print("No images found in directory")
+            self.state = {
+                "source_directory": directory,
+                "current_batch_index": 0,
+                "total_batches": 0,
+                "batches": []
+            }
+            self.save_state()
+            return
+
+        print(f"Found {len(all_images)} images (flat directory mode)")
+        print()
+
+        # Shuffle images for random ordering
+        shuffled = list(all_images)
+        random.shuffle(shuffled)
+
+        # Split into random-sized batches of 1 to max_batch_size
+        all_batches = []
+        batch_number = 1
+        remaining = list(shuffled)
+
+        while remaining:
+            batch_size = random.randint(self.min_batch_size, min(self.max_batch_size, len(remaining)))
+            batch_images = remaining[:batch_size]
+            remaining = remaining[batch_size:]
+
+            folder_name = os.path.basename(directory)
+            batch_info = {
+                "batch_number": batch_number,
+                "date_folder": folder_name,
+                "folder_path": directory,
+                "folder_name": folder_name,
+                "images": batch_images,
+                "image_count": len(batch_images),
+                "is_multi_date": False,
+                "is_multi_location": False,
+                "location": None
+            }
+            all_batches.append(batch_info)
+            batch_number += 1
+
+        # Update state
+        self.state = {
+            "source_directory": directory,
+            "current_batch_index": 0,
+            "total_batches": len(all_batches),
+            "batches": all_batches
+        }
+        self.save_state()
+
+        # Report
+        print("=" * 60)
+        print("BATCH CREATION SUMMARY (flat directory mode)")
+        print("=" * 60)
+
+        total_images = sum(b['image_count'] for b in all_batches)
+        print(f"Created {len(all_batches)} batches from {total_images} images")
+        print()
+
+        # Batch size distribution
+        size_counts = defaultdict(int)
+        for b in all_batches:
+            size_counts[b['image_count']] += 1
+
+        print("Batch size distribution:")
+        for size in sorted(size_counts.keys()):
+            print(f"  {size} images: {size_counts[size]} batches")
+        print()
+        print("=" * 60)
+        print()
+
     def get_current_batch(self) -> Optional[Dict]:
         """Get the current batch without advancing."""
         if not self.state["batches"]:
@@ -707,8 +797,8 @@ Examples:
     # Configuration options
     parser.add_argument('--min-batch', type=int, default=1,
                         help='Minimum batch size (default: 1)')
-    parser.add_argument('--max-batch', type=int, default=5,
-                        help='Maximum batch size (default: 5)')
+    parser.add_argument('--max-batch', type=int, default=6,
+                        help='Maximum batch size (default: 6)')
     parser.add_argument('--no-combine-singles', action='store_true',
                         help='Don\'t combine single-image dates (each becomes its own batch)')
     parser.add_argument('--prefer-small', action='store_true',

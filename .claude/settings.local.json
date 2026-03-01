@@ -55,7 +55,12 @@
       "Bash(git init:*)",
       "Bash(git add:*)",
       "Bash(git branch:*)",
-      "Bash(git -C /Users/jowilson/Code/blurb_album_creator add .claude/settings.local.json)"
+      "Bash(git -C /Users/jowilson/Code/blurb_album_creator add .claude/settings.local.json)",
+      "Bash(git commit:*)",
+      "Bash(gh repo create:*)",
+      "Bash(git -C /Users/jowilson/Code/blurb_album_creator log --oneline)",
+      "Bash(git -C /Users/jowilson/Code/blurb_album_creator diff --stat)",
+      "Bash(git -C /Users/jowilson/Code/blurb_album_creator add .claude/skills/image-batcher/SKILL.md .claude/skills/image-batcher/batcher.py .claude/settings.local.json)"
     ]
   }
 }
