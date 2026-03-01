@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Large binary files and working directories
+inputs/
+outputs/
+
+# Large sample albums (keep only templates/)
+samples/*.blurb
+samples/*.pdf
+
+# Python
+__pycache__/
+*.pyc
+
+# Image batcher state
+/tmp/image_batcher_state.json
