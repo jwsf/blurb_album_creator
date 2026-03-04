@@ -4,13 +4,14 @@ Image Batcher - Manages batches of images from date-organized folders.
 Batches are 1-6 images each, never spanning multiple date folders or locations.
 
 When no date folders are found, falls back to flat-directory mode:
-shuffles all images and splits into random batches of 1 to max_batch_size.
+groups images by filename commonality (shared non-numeric words) and splits
+into batches of 1 to max_batch_size, preserving filename sort order.
 
 Features:
 - Enhanced metadata extraction (location hierarchy, captions, date validation)
 - Location-aware single-image date batching
-- Orientation-aware batching
-- Flat-directory fallback with random batch sizes
+- Flat-directory fallback with filename-commonality grouping
+- Order-preserving batching (image order is never altered)
 - Configurable batch sizes and strategies
 - Comprehensive reporting and validation
 """
@@ -19,7 +20,6 @@ import os
 import sys
 import json
 import re
-import random
 import subprocess
 import argparse
 from pathlib import Path
@@ -214,7 +214,10 @@ class ImageBatcher:
         return groups
 
     def create_batches_from_images(self, images: List[str], metadata: Dict[str, Dict] = None) -> List[List[str]]:
-        """Split images into batches of min_size-max_size, optionally orientation-aware.
+        """Split images into batches of min_size-max_size.
+
+        Image order is always preserved — images appear in batches in the
+        same order they are provided.
 
         Args:
             images: List of image paths
@@ -223,21 +226,7 @@ class ImageBatcher:
         Returns:
             List of batches (each batch is a list of image paths)
         """
-        if not images:
-            return []
-
-        # If metadata provided, pre-group by orientation for better layout matching
-        if metadata and len(images) > 1:
-            portrait = [img for img in images if metadata.get(img, {}).get('orientation') == 'portrait']
-            landscape = [img for img in images if metadata.get(img, {}).get('orientation') == 'landscape']
-
-            # Create batches for each orientation group
-            batches = []
-            for group in [portrait, landscape]:
-                batches.extend(self._create_batches_simple(group))
-            return batches
-        else:
-            return self._create_batches_simple(images)
+        return self._create_batches_simple(images)
 
     def _create_batches_simple(self, images: List[str]) -> List[List[str]]:
         """Split images into batches respecting min/max size and preference."""
@@ -565,11 +554,30 @@ class ImageBatcher:
         print("=" * 60)
         print()
 
+    def _extract_filename_group_key(self, filepath: str) -> str:
+        """Extract a group key from a filename by removing numeric tokens and extension.
+
+        Splits the filename on non-alphanumeric characters, discards purely
+        numeric tokens (sequence numbers, dates-as-digits, etc.), and joins
+        the remaining words in lowercase.
+
+        Examples:
+            'beach_sunset_001.jpg'   -> 'beach_sunset'
+            'IMG_2024_mountain.jpg'  -> 'img_mountain'
+            'DSC_0042.jpg'           -> 'dsc'
+            '001.jpg'                -> ''
+        """
+        name = Path(filepath).stem
+        tokens = re.split(r'[^a-zA-Z0-9]+', name)
+        word_tokens = [t.lower() for t in tokens if t and not t.isdigit()]
+        return '_'.join(word_tokens)
+
     def _scan_flat_directory(self, directory: str):
         """Fallback: scan a flat directory with no date folders.
 
-        Finds all images recursively, shuffles them, and splits into
-        random-sized batches of 1 to max_batch_size.
+        Finds all images recursively, groups them by filename commonality
+        (shared non-numeric words), and splits into batches while
+        preserving filename sort order.
         """
         all_images = self.find_images_recursive(directory)
 
@@ -587,34 +595,48 @@ class ImageBatcher:
         print(f"Found {len(all_images)} images (flat directory mode)")
         print()
 
-        # Shuffle images for random ordering
-        shuffled = list(all_images)
-        random.shuffle(shuffled)
+        # Group consecutive images by filename commonality (preserving sort order)
+        groups = []
+        current_key = self._extract_filename_group_key(all_images[0])
+        current_group = [all_images[0]]
 
-        # Split into random-sized batches of 1 to max_batch_size
+        for img in all_images[1:]:
+            key = self._extract_filename_group_key(img)
+            if key != current_key:
+                groups.append((current_key, current_group))
+                current_key = key
+                current_group = [img]
+            else:
+                current_group.append(img)
+        groups.append((current_key, current_group))
+
+        print(f"Found {len(groups)} filename group(s):")
+        for key, imgs in groups:
+            print(f"  '{key or '(numeric only)'}': {len(imgs)} images")
+        print()
+
+        # Create batches from groups (order preserved within and across groups)
         all_batches = []
         batch_number = 1
-        remaining = list(shuffled)
 
-        while remaining:
-            batch_size = random.randint(self.min_batch_size, min(self.max_batch_size, len(remaining)))
-            batch_images = remaining[:batch_size]
-            remaining = remaining[batch_size:]
-
-            folder_name = os.path.basename(directory)
-            batch_info = {
-                "batch_number": batch_number,
-                "date_folder": folder_name,
-                "folder_path": directory,
-                "folder_name": folder_name,
-                "images": batch_images,
-                "image_count": len(batch_images),
-                "is_multi_date": False,
-                "is_multi_location": False,
-                "location": None
-            }
-            all_batches.append(batch_info)
-            batch_number += 1
+        for group_key, group_images in groups:
+            batches = self._create_batches_simple(group_images)
+            for batch_images in batches:
+                display_name = group_key or os.path.basename(directory)
+                batch_info = {
+                    "batch_number": batch_number,
+                    "date_folder": display_name,
+                    "folder_path": directory,
+                    "folder_name": display_name,
+                    "images": batch_images,
+                    "image_count": len(batch_images),
+                    "is_multi_date": False,
+                    "is_multi_location": False,
+                    "location": None,
+                    "filename_group": group_key
+                }
+                all_batches.append(batch_info)
+                batch_number += 1
 
         # Update state
         self.state = {
@@ -632,6 +654,7 @@ class ImageBatcher:
 
         total_images = sum(b['image_count'] for b in all_batches)
         print(f"Created {len(all_batches)} batches from {total_images} images")
+        print(f"Filename groups: {len(groups)}")
         print()
 
         # Batch size distribution

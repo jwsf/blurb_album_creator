@@ -18,6 +18,16 @@
 - Adding a single image
 - User specifies exact images to add (e.g., "add these 3 photos")
 
+## Order Preservation (Mandatory)
+
+**CRITICAL**: The image batcher must NEVER alter the order of photos. Images always appear in batches in the same order they were found (sorted by filename/path). This applies to ALL modes:
+
+- **Date-folder mode**: Images within each date folder retain their filename sort order across all batches.
+- **Flat-directory mode**: Images retain their recursive filename sort order; grouping by filename commonality does not reorder them.
+- **No shuffling, no random reordering, no orientation-based reordering.**
+
+The user's chosen filenames and directory structure define the canonical order. Batching only decides where to *split* the sequence — it never rearranges it.
+
 ## Why Use Image Batcher
 
 1. **Efficient organization**: Groups images into optimal batches of 1-5
@@ -148,11 +158,13 @@ The `/blurb` skill's batch addition methods (Section 5d and 5c) should:
 - ❌ Create one page per image when batching is possible
 - ❌ Ignore date organization from folder structure
 - ❌ Mix single-image dates with multi-image dates in batches
+- ❌ Shuffle, randomize, or reorder images (order must always be preserved)
 
 **DO:**
 - ✅ Always initialize image-batcher for 10+ images
 - ✅ Use batch data to guide page creation
 - ✅ Preserve date organization from image-batcher
+- ✅ Preserve filename sort order within every batch
 - ✅ Report batch statistics to user
 
 ## Verification
