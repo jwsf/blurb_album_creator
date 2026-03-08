@@ -10,6 +10,7 @@ to appropriately oriented containers.
 import os
 import sys
 import json
+import re
 import xml.etree.ElementTree as ET
 import subprocess
 import random
@@ -180,6 +181,81 @@ def find_best_template_size(needed, available_sizes):
             return s
     # Fall back to largest available
     return max(available_sizes)
+
+
+def replace_text_with_lorem(html):
+    """Replace visible text nodes in HTML/CDATA content with 'Lorem ipsum'.
+
+    Matches non-empty text between > and < tags, preserving all HTML structure,
+    attributes, and whitespace-only nodes.
+    """
+    return re.sub(
+        r'(>)([^<]+)(<)',
+        lambda m: m.group(1) + 'Lorem ipsum' + m.group(3)
+        if m.group(2).strip() else m.group(0),
+        html
+    )
+
+
+def clean_template_pages(section, max_existing):
+    """Remove original template body pages and replace text in new pages.
+
+    1. Delete all template pages (1 <= page_number <= max_existing)
+    2. Replace text content in new pages with 'Lorem ipsum'
+    3. Print summary
+    """
+    # --- 1. Delete original template body pages ---
+    pages_deleted = 0
+    pages_to_remove = []
+    for page in section.findall('page'):
+        pn = page.get('number')
+        if not pn or not pn.lstrip('-').isdigit():
+            continue
+        pn_int = int(pn)
+        if 1 <= pn_int <= max_existing:
+            pages_to_remove.append(page)
+
+    for page in pages_to_remove:
+        section.remove(page)
+        pages_deleted += 1
+
+    # --- 2. Replace text in new pages with "Lorem ipsum" ---
+    text_pages_replaced = 0
+    for page in section.findall('page'):
+        pn = page.get('number')
+        if not pn or not pn.lstrip('-').isdigit():
+            continue
+        pn_int = int(pn)
+        if pn_int <= max_existing:
+            continue  # masterpage or cover; skip
+
+        text_containers = page.findall('.//container[@type="text"]')
+        if not text_containers:
+            continue
+
+        replaced_any = False
+        for container in text_containers:
+            # Text is stored in the container's text or tail, or in child elements
+            # Walk all text content in the container
+            for elem in container.iter():
+                if elem.text and elem.text.strip():
+                    original = elem.text
+                    elem.text = replace_text_with_lorem(original)
+                    if elem.text != original:
+                        replaced_any = True
+                if elem.tail and elem.tail.strip():
+                    original = elem.tail
+                    elem.tail = replace_text_with_lorem(original)
+                    if elem.tail != original:
+                        replaced_any = True
+
+        if replaced_any:
+            text_pages_replaced += 1
+
+    # --- 3. Summary ---
+    print()
+    print(f"Template cleanup: deleted {pages_deleted} original template pages, "
+          f"replaced text in {text_pages_replaced} new pages")
 
 
 def process_all_batches(blurb_file):
@@ -363,9 +439,12 @@ def process_all_batches(blurb_file):
     for new_page in new_pages:
         section.append(new_page)
 
+    # Clean up: remove original template pages and replace text in new pages
+    clean_template_pages(section, max_existing)
+
     # Verify pages were added
     final_count = len(section.findall('page'))
-    print(f"Pages in section after append: {final_count}")
+    print(f"Pages in section after cleanup: {final_count}")
 
     # Save updated XML
     tree.write('/tmp/bbf2_updated.xml', encoding='utf-8', xml_declaration=True)
