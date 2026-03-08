@@ -206,15 +206,42 @@ def replace_text_with_lorem(html):
     )
 
 
-def clean_template_pages(section, max_existing):
-    """Strip spread attributes, renumber pages, and replace text in new pages.
+def clean_template_pages(section, max_existing, page_width=693):
+    """Remove spread pages, strip spread attributes, renumber, and replace text.
 
-    Template body pages (1 <= page_number <= max_existing) are kept intact.
-    1. Strip spread attributes and renumber all body pages sequentially from 1
-    2. Replace text content in new pages with 'Lorem ipsum'
-    3. Print summary
+    1. Remove template spread pages (containers extend beyond page width)
+    2. Strip spread attributes and renumber all body pages sequentially from 1
+    3. Replace text content in pages with 'Lorem ipsum'
+    4. Print summary
     """
-    # --- 1. Strip spread attribute and renumber pages sequentially from 1 ---
+    # --- 1. Remove template spread pages ---
+    # Spread pages have containers that extend beyond the single-page width.
+    # They're excluded from the template pool so they have no images assigned.
+    spreads_deleted = 0
+    pages_to_remove = []
+    for page in section.findall('page'):
+        pn = page.get('number')
+        if not pn or not pn.lstrip('-').isdigit():
+            continue
+        pn_int = int(pn)
+        if pn_int < 1:
+            continue
+        # Check if any container extends beyond page width
+        off_page = False
+        for c in page.findall('.//container'):
+            x = float(c.get('x', 0))
+            w = float(c.get('width', 0))
+            if x + w > page_width + 1:  # 1pt tolerance
+                off_page = True
+                break
+        if off_page:
+            pages_to_remove.append(page)
+
+    for page in pages_to_remove:
+        section.remove(page)
+        spreads_deleted += 1
+
+    # --- 2. Strip spread attribute and renumber pages sequentially from 1 ---
     # New pages inherit spread="true" from cloned template pages, which causes
     # Bookwright to display them as two-page spreads with duplicate page numbers.
     # Remove the attribute so each page occupies a single slot.
@@ -266,12 +293,17 @@ def clean_template_pages(section, max_existing):
         if replaced_any:
             text_pages_replaced += 1
 
-    # --- 3. Summary ---
+    # --- 4. Summary ---
     total_pages = page_num - 1
     print()
-    print(f"Template cleanup: renumbered {total_pages} pages (1-{total_pages}), "
-          f"removed {spreads_removed} spread attributes, "
-          f"replaced text in {text_pages_replaced} pages")
+    parts = []
+    if spreads_deleted:
+        parts.append(f"deleted {spreads_deleted} spread pages")
+    parts.append(f"renumbered {total_pages} pages (1-{total_pages})")
+    if spreads_removed:
+        parts.append(f"stripped {spreads_removed} spread attributes")
+    parts.append(f"replaced text in {text_pages_replaced} pages")
+    print(f"Template cleanup: {', '.join(parts)}")
 
 
 def process_all_batches(blurb_file):
