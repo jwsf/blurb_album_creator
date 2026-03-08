@@ -144,15 +144,24 @@ def analyze_template(blurb_file):
 
     pages_by_count = defaultdict(list)
     page_profiles = {}  # keyed by id(page)
+    spreads_skipped = 0
     for page in section.findall('page'):
         pn = page.get('number')
         if not pn:
+            continue
+        # Skip spread pages — their containers extend beyond the single-page
+        # width and produce off-page placeholders when cloned as normal pages.
+        if page.get('spread') == 'true':
+            spreads_skipped += 1
             continue
         containers = page.findall('.//container[@type="image"]')
         count = len(containers)
         if 1 <= count <= 6:
             pages_by_count[count].append(page)
             page_profiles[id(page)] = get_page_orientation_profile(page)
+
+    if spreads_skipped:
+        print(f"  (skipped {spreads_skipped} spread pages from template pool)")
 
     return dict(pages_by_count), page_profiles, tree, root, section
 
@@ -198,28 +207,14 @@ def replace_text_with_lorem(html):
 
 
 def clean_template_pages(section, max_existing):
-    """Remove original template body pages and replace text in new pages.
+    """Strip spread attributes, renumber pages, and replace text in new pages.
 
-    1. Delete all template pages (1 <= page_number <= max_existing)
+    Template body pages (1 <= page_number <= max_existing) are kept intact.
+    1. Strip spread attributes and renumber all body pages sequentially from 1
     2. Replace text content in new pages with 'Lorem ipsum'
     3. Print summary
     """
-    # --- 1. Delete original template body pages ---
-    pages_deleted = 0
-    pages_to_remove = []
-    for page in section.findall('page'):
-        pn = page.get('number')
-        if not pn or not pn.lstrip('-').isdigit():
-            continue
-        pn_int = int(pn)
-        if 1 <= pn_int <= max_existing:
-            pages_to_remove.append(page)
-
-    for page in pages_to_remove:
-        section.remove(page)
-        pages_deleted += 1
-
-    # --- 2. Strip spread attribute and renumber pages sequentially from 1 ---
+    # --- 1. Strip spread attribute and renumber pages sequentially from 1 ---
     # New pages inherit spread="true" from cloned template pages, which causes
     # Bookwright to display them as two-page spreads with duplicate page numbers.
     # Remove the attribute so each page occupies a single slot.
@@ -238,7 +233,7 @@ def clean_template_pages(section, max_existing):
         page.set('number', str(page_num))
         page_num += 1
 
-    # --- 3. Replace text in new pages with "Lorem ipsum" ---
+    # --- 2. Replace text in pages with "Lorem ipsum" ---
     text_pages_replaced = 0
     for page in section.findall('page'):
         pn = page.get('number')
@@ -271,13 +266,12 @@ def clean_template_pages(section, max_existing):
         if replaced_any:
             text_pages_replaced += 1
 
-    # --- 4. Summary ---
+    # --- 3. Summary ---
     total_pages = page_num - 1
     print()
-    print(f"Template cleanup: deleted {pages_deleted} original template pages, "
-          f"renumbered {total_pages} pages (1-{total_pages}), "
+    print(f"Template cleanup: renumbered {total_pages} pages (1-{total_pages}), "
           f"removed {spreads_removed} spread attributes, "
-          f"replaced text in {text_pages_replaced} new pages")
+          f"replaced text in {text_pages_replaced} pages")
 
 
 def process_all_batches(blurb_file):
@@ -640,7 +634,8 @@ def process_all_batches(blurb_file):
         print(f"✓ Media registry: {media_count} entries")
 
     print("=" * 60)
-    print(f"{pages_created} pages created (1-{pages_created})")
+    total_page_count = len(page_nums)
+    print(f"{pages_created} new pages added ({total_page_count} total pages including template)")
     print("=" * 60)
 
     # Cleanup verification files
