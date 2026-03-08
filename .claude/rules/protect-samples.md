@@ -31,18 +31,18 @@ When working with template files:
 
 1. ✅ **ALLOWED**: Copy template to a new location
    ```bash
-   cp "samples/templates/TravelBook-StandardLandscape.blurb" "outputs/My Book.blurb"
+   cp "samples/templates/2020 empty photo album.blurb" "outputs/My Book.blurb"
    ```
 
 2. ✅ **ALLOWED**: Read and inspect sample files
    ```bash
-   sqlite3 "samples/templates/TravelBook-StandardLandscape.blurb" "SELECT * FROM Files;"
+   sqlite3 "samples/templates/2020 empty photo album.blurb" "SELECT * FROM Files;"
    ```
 
 3. ❌ **FORBIDDEN**: Modify sample files directly
    ```bash
    # NEVER DO THIS:
-   sqlite3 "samples/templates/TravelBook-StandardLandscape.blurb" "UPDATE Files SET ..."
+   sqlite3 "samples/templates/2020 empty photo album.blurb" "UPDATE Files SET ..."
    ```
 
 4. ❌ **FORBIDDEN**: Edit sample files with Edit/Write tools

@@ -45,7 +45,7 @@ The user's chosen filenames and directory structure define the canonical order. 
 python3 .claude/skills/image-batcher/batcher.py init inputs/
 
 # 2. Create/prepare blurb file
-cp "samples/templates/TravelBook-StandardLandscape.blurb" "outputs/Album.blurb"
+cp "samples/templates/2020 empty photo album.blurb" "outputs/Album.blurb"
 # Set title and author...
 
 # 3. Process all batches

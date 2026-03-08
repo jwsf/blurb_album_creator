@@ -1900,7 +1900,11 @@ Create a new .blurb file based on a template from `samples/templates/`.
 **REQUIRED: Title and Author must be specified**
 Every new .blurb file MUST have a title and author. If not provided by the user, ask for them.
 
-**If template not specified, list available templates and ask the user:**
+**Default template:** `samples/templates/2020 empty photo album.blurb`
+- This is the preferred template — use it automatically unless the user specifies a different one.
+- It has 186 pages, 494 image containers (1-9 per page), and the widest variety of layouts.
+
+**If user explicitly asks to choose a template**, list available templates and ask:
 1. First, list all available templates from the directory:
 ```bash
 # Find all .blurb files in samples/templates
@@ -1924,7 +1928,7 @@ Ask for the book author - this will be used in:
 mkdir -p outputs
 
 # Copy the chosen template to outputs directory (unless user specified a different path)
-cp "samples/templates/TravelBook-StandardLandscape.blurb" "outputs/new_file.blurb"
+cp "samples/templates/2020 empty photo album.blurb" "outputs/new_file.blurb"
 
 # Extract bbf2.xml to modify title, author, and spine text
 sqlite3 "outputs/new_file.blurb" "SELECT filecontent FROM Files WHERE filepath='bbf2.xml';" > /tmp/bbf2_temp.xml
@@ -2406,7 +2410,7 @@ sqlite3 "path/to/file.blurb" "SELECT filecontent FROM Files WHERE filepath='proj
 ### Example 1: Quick inspection
 ```bash
 echo "=== Blurb File Info ==="
-sqlite3 "samples/templates/TravelBook-StandardLandscape.blurb" "
+sqlite3 "samples/templates/2020 empty photo album.blurb" "
 SELECT 'Version: ' || version FROM ArchiveVersion;
 SELECT '';
 SELECT 'Files in archive:';
@@ -2534,7 +2538,7 @@ BOOK_AUTHOR="Jane Smith"
 mkdir -p outputs
 
 # Copy template to start a new project (keeps all template content)
-cp "samples/templates/TravelBook-StandardLandscape.blurb" "outputs/My New Album.blurb"
+cp "samples/templates/2020 empty photo album.blurb" "outputs/My New Album.blurb"
 
 # Extract bbf2.xml
 sqlite3 "outputs/My New Album.blurb" "SELECT filecontent FROM Files WHERE filepath='bbf2.xml';" > /tmp/bbf2_temp.xml
@@ -2573,7 +2577,7 @@ BOOK_AUTHOR="Test Author"
 mkdir -p outputs inputs
 
 # Copy template
-cp "samples/templates/TravelBook-StandardLandscape.blurb" "outputs/Sample Album.blurb"
+cp "samples/templates/2020 empty photo album.blurb" "outputs/Sample Album.blurb"
 
 # Extract bbf2.xml and set title/author
 sqlite3 "outputs/Sample Album.blurb" "SELECT filecontent FROM Files WHERE filepath='bbf2.xml';" > /tmp/bbf2_temp.xml
