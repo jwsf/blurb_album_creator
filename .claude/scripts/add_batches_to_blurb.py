@@ -3,6 +3,8 @@
 Add all image-batcher batches to a .blurb file.
 Reads batch state from /tmp/image_batcher_state.json.
 Matches each batch to a template page with the right number of containers.
+Uses orientation-aware template selection to match portrait/landscape images
+to appropriately oriented containers.
 """
 
 import os
@@ -23,8 +25,109 @@ def load_batcher_state():
         return json.load(f)
 
 
+def get_container_orientation(container):
+    """Determine if a container is portrait, landscape, or square."""
+    w = float(container.get('width', 0))
+    h = float(container.get('height', 0))
+    if h > w * 1.05:
+        return 'portrait'
+    elif w > h * 1.05:
+        return 'landscape'
+    else:
+        return 'square'
+
+
+def get_image_orientation(img_data):
+    """Determine if an image is portrait or landscape."""
+    w = img_data['width']
+    h = img_data['height']
+    if h > w:
+        return 'portrait'
+    else:
+        return 'landscape'
+
+
+def get_page_orientation_profile(page):
+    """Get the orientation profile of a template page's image containers.
+
+    Returns a dict with counts of portrait, landscape, and square containers,
+    plus an ordered list of container orientations.
+    """
+    containers = page.findall('.//container[@type="image"]')
+    orientations = [get_container_orientation(c) for c in containers]
+    return {
+        'portrait': sum(1 for o in orientations if o == 'portrait'),
+        'landscape': sum(1 for o in orientations if o in ('landscape', 'square')),
+        'orientations': orientations,
+    }
+
+
+def score_template_match(batch_image_data, page, page_profile):
+    """Score how well a template page matches a batch's orientation mix.
+
+    Returns a score from 0-100 where 100 is a perfect orientation match.
+    """
+    batch_portrait = sum(1 for img in batch_image_data if get_image_orientation(img) == 'portrait')
+    batch_landscape = len(batch_image_data) - batch_portrait
+
+    template_portrait = page_profile['portrait']
+    template_landscape = page_profile['landscape']
+
+    portrait_diff = abs(batch_portrait - template_portrait)
+    landscape_diff = abs(batch_landscape - template_landscape)
+    total_diff = portrait_diff + landscape_diff
+
+    # Each mismatch costs 10 points from a perfect 100
+    score = max(0, 100 - total_diff * 10)
+    return score
+
+
+def assign_images_to_containers(batch_image_data, page, page_profile):
+    """Assign images to containers respecting orientation matching.
+
+    Portrait images go to portrait containers, landscape to landscape.
+    Preserves the relative order within each orientation group.
+    Returns a list of (container, img_data) pairs in container order.
+    """
+    containers = page.findall('.//container[@type="image"]')
+    orientations = page_profile['orientations']
+
+    # Split images by orientation, preserving order within each group
+    portrait_images = [img for img in batch_image_data if get_image_orientation(img) == 'portrait']
+    landscape_images = [img for img in batch_image_data if get_image_orientation(img) == 'landscape']
+
+    # Build assignment: for each container, pick the best-matching image
+    assignments = [None] * len(containers)
+    portrait_idx = 0
+    landscape_idx = 0
+
+    # First pass: assign matching orientations
+    for i, orient in enumerate(orientations):
+        if orient == 'portrait' and portrait_idx < len(portrait_images):
+            assignments[i] = portrait_images[portrait_idx]
+            portrait_idx += 1
+        elif orient in ('landscape', 'square') and landscape_idx < len(landscape_images):
+            assignments[i] = landscape_images[landscape_idx]
+            landscape_idx += 1
+
+    # Second pass: fill remaining slots with whatever's left
+    remaining = []
+    if portrait_idx < len(portrait_images):
+        remaining.extend(portrait_images[portrait_idx:])
+    if landscape_idx < len(landscape_images):
+        remaining.extend(landscape_images[landscape_idx:])
+
+    remaining_idx = 0
+    for i in range(len(assignments)):
+        if assignments[i] is None and remaining_idx < len(remaining):
+            assignments[i] = remaining[remaining_idx]
+            remaining_idx += 1
+
+    return list(zip(containers, [a for a in assignments if a is not None]))
+
+
 def analyze_template(blurb_file):
-    """Analyze template pages and group by container count."""
+    """Analyze template pages, group by container count, and extract orientation profiles."""
     subprocess.run(
         ['sqlite3', blurb_file,
          "SELECT writefile('/tmp/bbf2_work.xml', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
@@ -39,6 +142,7 @@ def analyze_template(blurb_file):
         sys.exit(1)
 
     pages_by_count = defaultdict(list)
+    page_profiles = {}  # keyed by id(page)
     for page in section.findall('page'):
         pn = page.get('number')
         if not pn:
@@ -47,8 +151,9 @@ def analyze_template(blurb_file):
         count = len(containers)
         if 1 <= count <= 6:
             pages_by_count[count].append(page)
+            page_profiles[id(page)] = get_page_orientation_profile(page)
 
-    return dict(pages_by_count), tree, root, section
+    return dict(pages_by_count), page_profiles, tree, root, section
 
 
 def get_image_dimensions(filepath):
@@ -89,12 +194,19 @@ def process_all_batches(blurb_file):
     print(f"Processing {len(batches)} batches with {total_images} images total")
     print()
 
-    pages_by_count, tree, root, section = analyze_template(blurb_file)
+    pages_by_count, page_profiles, tree, root, section = analyze_template(blurb_file)
     available_sizes = set(pages_by_count.keys())
 
     print("Available template layouts:")
     for count in sorted(pages_by_count.keys()):
-        print(f"  {count} containers: {len(pages_by_count[count])} pages")
+        pages = pages_by_count[count]
+        # Summarize orientation profiles for this container count
+        profiles = [page_profiles[id(p)] for p in pages]
+        unique_profiles = set()
+        for prof in profiles:
+            unique_profiles.add((prof['portrait'], prof['landscape']))
+        profile_strs = [f"{p}P/{l}L" for p, l in sorted(unique_profiles)]
+        print(f"  {count} containers: {len(pages)} pages (layouts: {', '.join(profile_strs)})")
     print()
 
     # Determine max page number in existing template
@@ -137,12 +249,7 @@ def process_all_batches(blurb_file):
             remaining_images = remaining_images[use_size:]
             sub_batch_num += 1
 
-            # Pick random template page with matching container count
-            template_page = random.choice(pages_by_count[use_size])
-            new_page = copy.deepcopy(template_page)
-            new_page.set('number', str(page_num))
-
-            # Process each image in sub-batch
+            # Process each image in sub-batch first (need dimensions for orientation matching)
             batch_image_data = []
             for img_path in sub_images:
                 if not os.path.exists(img_path):
@@ -195,9 +302,31 @@ def process_all_batches(blurb_file):
                 all_image_data.append(img_data)
                 images_added += 1
 
-            # Fill containers on the page
-            containers = new_page.findall('.//container[@type="image"]')
-            for idx, (container, img) in enumerate(zip(containers, batch_image_data)):
+            # Select best-matching template page based on orientation
+            candidates = pages_by_count[use_size]
+            best_score = -1
+            best_pages = []
+            for candidate in candidates:
+                profile = page_profiles[id(candidate)]
+                score = score_template_match(batch_image_data, candidate, profile)
+                if score > best_score:
+                    best_score = score
+                    best_pages = [candidate]
+                elif score == best_score:
+                    best_pages.append(candidate)
+
+            # Among equally-scored pages, pick randomly for variety
+            template_page = random.choice(best_pages)
+            template_profile = page_profiles[id(template_page)]
+            new_page = copy.deepcopy(template_page)
+            new_page.set('number', str(page_num))
+
+            # Build orientation profile for the deep-copied page
+            copied_profile = get_page_orientation_profile(new_page)
+
+            # Fill containers using orientation-aware assignment
+            assignments = assign_images_to_containers(batch_image_data, new_page, copied_profile)
+            for container, img in assignments:
                 filename = img['path'].split('/')[-1]
                 image_elem = container.find('image')
                 if image_elem is not None:
@@ -216,10 +345,17 @@ def process_all_batches(blurb_file):
             new_pages.append(new_page)
             pages_created += 1
 
+            # Build orientation summary for log
+            batch_p = sum(1 for img in batch_image_data if get_image_orientation(img) == 'portrait')
+            batch_l = len(batch_image_data) - batch_p
+            tmpl_p = template_profile['portrait']
+            tmpl_l = template_profile['landscape']
+            orient_info = f"{batch_p}P/{batch_l}L -> {tmpl_p}P/{tmpl_l}L (score:{best_score})"
+
             if sub_batch_num == 1 and not remaining_images:
-                print(f"  Batch {batch_num}: {len(batch_image_data)} images -> page {page_num} ({use_size}-container template) [{batch_label}]")
+                print(f"  Batch {batch_num}: {len(batch_image_data)} images -> page {page_num} [{orient_info}] [{batch_label}]")
             else:
-                print(f"  Batch {batch_num}.{sub_batch_num}: {len(batch_image_data)} images -> page {page_num} ({use_size}-container template) [{batch_label}]")
+                print(f"  Batch {batch_num}.{sub_batch_num}: {len(batch_image_data)} images -> page {page_num} [{orient_info}] [{batch_label}]")
 
             page_num += 1
 
