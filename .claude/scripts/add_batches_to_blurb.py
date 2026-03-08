@@ -575,9 +575,12 @@ def process_all_batches(blurb_file):
 
     # Count template images (they're already in the archive)
     # We can estimate this by counting XML refs in template pages
-    subprocess.run(['sqlite3', blurb_file,
+    fc_result = subprocess.run(['sqlite3', blurb_file,
                    "SELECT writefile('/tmp/bbf2_final_check.xml', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
-                  capture_output=True)
+                  capture_output=True, text=True)
+    if fc_result.returncode != 0:
+        print(f"ERROR extracting bbf2.xml for verification: {fc_result.stderr.strip()}")
+        sys.exit(1)
     verify_tree = ET.parse('/tmp/bbf2_final_check.xml')
     verify_section = verify_tree.getroot().find('.//section[@name=""]')
 
@@ -603,12 +606,16 @@ def process_all_batches(blurb_file):
         print(f"{len(page_nums)} pages numbered 1-{len(page_nums)} (sequential, no spreads)")
 
     # Count media registry entries
-    subprocess.run(['sqlite3', blurb_file,
+    mr_result = subprocess.run(['sqlite3', blurb_file,
                    "SELECT writefile('/tmp/media_registry_final.xml', filecontent) FROM Files WHERE filepath='media_registry.xml';"],
-                  capture_output=True)
-    mr_verify = ET.parse('/tmp/media_registry_final.xml')
-    mr_images = mr_verify.getroot().find('.//images')
-    media_count = len(mr_images.findall('media')) if mr_images is not None else 0
+                  capture_output=True, text=True)
+    media_count = 0
+    if mr_result.returncode == 0 and os.path.exists('/tmp/media_registry_final.xml'):
+        mr_verify = ET.parse('/tmp/media_registry_final.xml')
+        mr_images = mr_verify.getroot().find('.//images')
+        media_count = len(mr_images.findall('media')) if mr_images is not None else 0
+    else:
+        print(f"⚠️  Could not read media registry: {mr_result.stderr.strip()}")
 
     expected = sum(len(b['images']) for b in state['batches'])
 
