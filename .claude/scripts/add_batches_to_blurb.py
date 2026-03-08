@@ -578,17 +578,26 @@ def process_all_batches(blurb_file):
     verify_tree = ET.parse('/tmp/bbf2_final_check.xml')
     verify_section = verify_tree.getroot().find('.//section[@name=""]')
 
-    template_ref_count = 0
     xml_ref_count = 0
     for page in verify_section.findall('page'):
-        pn = int(page.get('number'))
+        pn = page.get('number')
+        if not pn or int(pn) < 1:
+            continue
         for c in page.findall('.//container[@type="image"]'):
             img = c.find('image')
             if img is not None and img.get('src'):
-                if pn <= max_existing:
-                    template_ref_count += 1
-                else:
-                    xml_ref_count += 1
+                xml_ref_count += 1
+
+    # Verify sequential page numbering
+    page_nums = sorted(int(p.get('number')) for p in verify_section.findall('page')
+                       if p.get('number', '').lstrip('-').isdigit() and int(p.get('number')) > 0)
+    expected_nums = list(range(1, len(page_nums) + 1))
+    if page_nums != expected_nums:
+        print(f"\n⚠️  ERROR: Page numbering not sequential!")
+        print(f"   Expected: 1-{len(page_nums)}")
+        print(f"   Got: {page_nums[:5]}...{page_nums[-5:]}")
+    else:
+        print(f"Pages numbered 1-{len(page_nums)} (sequential, no gaps)")
 
     # Count media registry entries
     subprocess.run(['sqlite3', blurb_file,
@@ -599,32 +608,30 @@ def process_all_batches(blurb_file):
     media_count = len(mr_images.findall('media')) if mr_images is not None else 0
 
     expected = sum(len(b['images']) for b in state['batches'])
-    new_archive_count = total_archive_count - template_ref_count
 
     print(f"Expected (source images): {expected}")
     print(f"Images processed: {images_added}")
-    print(f"XML refs in new pages: {xml_ref_count}")
-    print(f"Archive files (new only): {new_archive_count}")
-    print(f"Archive files (total): {total_archive_count} (includes {template_ref_count} from template)")
+    print(f"XML image refs: {xml_ref_count}")
+    print(f"Archive image files: {total_archive_count}")
     print(f"Media registry entries: {media_count}")
 
     if images_added != expected:
         print(f"\n⚠️  WARNING: {expected - images_added} images failed to add")
 
-    if new_archive_count != images_added:
-        print(f"\n⚠️  ERROR: New archive count mismatch (expected {images_added}, got {new_archive_count})")
+    if total_archive_count != images_added:
+        print(f"\n⚠️  ERROR: Archive count mismatch (expected {images_added}, got {total_archive_count})")
 
     if xml_ref_count != images_added:
         print(f"\n⚠️  ERROR: XML reference mismatch (expected {images_added}, got {xml_ref_count})")
 
-    if new_archive_count == images_added == xml_ref_count == expected:
+    if total_archive_count == images_added == xml_ref_count == expected:
         print(f"\n✓ All counts match: {images_added} images added successfully")
-        print(f"✓ Input: {expected} images")
-        print(f"✓ Archive: {new_archive_count} new + {template_ref_count} template = {total_archive_count} total")
-        print(f"✓ XML: {xml_ref_count} new references")
+        print(f"✓ Archive: {total_archive_count} images")
+        print(f"✓ XML: {xml_ref_count} references")
+        print(f"✓ Media registry: {media_count} entries")
 
     print("=" * 60)
-    print(f"Pages {max_existing + 1} - {max_existing + pages_created} appended to book")
+    print(f"{pages_created} pages created (1-{pages_created})")
     print("=" * 60)
 
     # Cleanup verification files
