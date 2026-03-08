@@ -219,15 +219,27 @@ def clean_template_pages(section, max_existing):
         section.remove(page)
         pages_deleted += 1
 
-    # --- 2. Replace text in new pages with "Lorem ipsum" ---
+    # --- 2. Renumber surviving pages sequentially from 1 ---
+    page_num = 1
+    for page in section.findall('page'):
+        pn = page.get('number')
+        if not pn or not pn.lstrip('-').isdigit():
+            continue
+        pn_int = int(pn)
+        if pn_int < 0:
+            continue  # masterpage; skip
+        page.set('number', str(page_num))
+        page_num += 1
+
+    # --- 3. Replace text in new pages with "Lorem ipsum" ---
     text_pages_replaced = 0
     for page in section.findall('page'):
         pn = page.get('number')
         if not pn or not pn.lstrip('-').isdigit():
             continue
         pn_int = int(pn)
-        if pn_int <= max_existing:
-            continue  # masterpage or cover; skip
+        if pn_int < 1:
+            continue  # masterpage; skip
 
         text_containers = page.findall('.//container[@type="text"]')
         if not text_containers:
@@ -252,9 +264,10 @@ def clean_template_pages(section, max_existing):
         if replaced_any:
             text_pages_replaced += 1
 
-    # --- 3. Summary ---
+    # --- 4. Summary ---
     print()
     print(f"Template cleanup: deleted {pages_deleted} original template pages, "
+          f"renumbered {page_num - 1} pages (1-{page_num - 1}), "
           f"replaced text in {text_pages_replaced} new pages")
 
 
