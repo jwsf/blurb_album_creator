@@ -220,6 +220,8 @@ def clean_template_pages(section, max_existing):
         pages_deleted += 1
 
     # --- 2. Renumber surviving pages sequentially from 1 ---
+    # Spread pages (spread="true") occupy two page slots in Bookwright,
+    # so they must advance the counter by 2 to avoid duplicate/missing numbers.
     page_num = 1
     for page in section.findall('page'):
         pn = page.get('number')
@@ -229,7 +231,10 @@ def clean_template_pages(section, max_existing):
         if pn_int < 0:
             continue  # masterpage; skip
         page.set('number', str(page_num))
-        page_num += 1
+        if page.get('spread') == 'true':
+            page_num += 2
+        else:
+            page_num += 1
 
     # --- 3. Replace text in new pages with "Lorem ipsum" ---
     text_pages_replaced = 0
@@ -265,9 +270,13 @@ def clean_template_pages(section, max_existing):
             text_pages_replaced += 1
 
     # --- 4. Summary ---
+    total_pages = len([p for p in section.findall('page')
+                       if p.get('number', '').lstrip('-').isdigit() and int(p.get('number')) > 0])
+    spread_count = len([p for p in section.findall('page')
+                        if p.get('spread') == 'true' and int(p.get('number', '0')) > 0])
     print()
     print(f"Template cleanup: deleted {pages_deleted} original template pages, "
-          f"renumbered {page_num - 1} pages (1-{page_num - 1}), "
+          f"renumbered {total_pages} pages (1-{page_num - 1}, {spread_count} spreads), "
           f"replaced text in {text_pages_replaced} new pages")
 
 
@@ -588,16 +597,36 @@ def process_all_batches(blurb_file):
             if img is not None and img.get('src'):
                 xml_ref_count += 1
 
-    # Verify sequential page numbering
-    page_nums = sorted(int(p.get('number')) for p in verify_section.findall('page')
-                       if p.get('number', '').lstrip('-').isdigit() and int(p.get('number')) > 0)
-    expected_nums = list(range(1, len(page_nums) + 1))
+    # Verify page numbering (accounting for spread pages which skip a number)
+    page_nums = []
+    spread_count = 0
+    for p in verify_section.findall('page'):
+        pn = p.get('number', '').lstrip('-')
+        if pn.isdigit() and int(p.get('number')) > 0:
+            page_nums.append(int(p.get('number')))
+            if p.get('spread') == 'true':
+                spread_count += 1
+    page_nums.sort()
+
+    # Rebuild expected sequence: each spread page skips a number
+    expected_num = 1
+    expected_nums = []
+    for p in verify_section.findall('page'):
+        pn = p.get('number', '').lstrip('-')
+        if pn.isdigit() and int(p.get('number')) > 0:
+            expected_nums.append(expected_num)
+            if p.get('spread') == 'true':
+                expected_num += 2
+            else:
+                expected_num += 1
+
+    expected_nums.sort()
     if page_nums != expected_nums:
-        print(f"\n⚠️  ERROR: Page numbering not sequential!")
-        print(f"   Expected: 1-{len(page_nums)}")
+        print(f"\n⚠️  ERROR: Page numbering issue!")
+        print(f"   Expected: {expected_nums[:5]}...{expected_nums[-5:]}")
         print(f"   Got: {page_nums[:5]}...{page_nums[-5:]}")
     else:
-        print(f"Pages numbered 1-{len(page_nums)} (sequential, no gaps)")
+        print(f"{len(page_nums)} pages (numbered 1-{page_nums[-1]}, {spread_count} spread pages)")
 
     # Count media registry entries
     subprocess.run(['sqlite3', blurb_file,
