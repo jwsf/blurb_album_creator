@@ -144,24 +144,15 @@ def analyze_template(blurb_file):
 
     pages_by_count = defaultdict(list)
     page_profiles = {}  # keyed by id(page)
-    spreads_skipped = 0
     for page in section.findall('page'):
         pn = page.get('number')
         if not pn:
-            continue
-        # Skip spread pages — their containers extend beyond the single-page
-        # width and produce off-page placeholders when cloned as normal pages.
-        if page.get('spread') == 'true':
-            spreads_skipped += 1
             continue
         containers = page.findall('.//container[@type="image"]')
         count = len(containers)
         if 1 <= count <= 6:
             pages_by_count[count].append(page)
             page_profiles[id(page)] = get_page_orientation_profile(page)
-
-    if spreads_skipped:
-        print(f"  (skipped {spreads_skipped} spread pages from template pool)")
 
     return dict(pages_by_count), page_profiles, tree, root, section
 
@@ -206,40 +197,27 @@ def replace_text_with_lorem(html):
     )
 
 
-def clean_template_pages(section, max_existing, page_width=693):
-    """Remove spread pages, strip spread attributes, renumber, and replace text.
+def clean_template_pages(section, max_existing):
+    """Remove original template body pages and replace text in new pages.
 
-    1. Remove template spread pages (containers extend beyond page width)
-    2. Strip spread attributes and renumber all body pages sequentially from 1
-    3. Replace text content in pages with 'Lorem ipsum'
-    4. Print summary
+    1. Delete all template pages (1 <= page_number <= max_existing)
+    2. Replace text content in new pages with 'Lorem ipsum'
+    3. Print summary
     """
-    # --- 1. Remove template spread pages ---
-    # Spread pages have containers that extend beyond the single-page width.
-    # They're excluded from the template pool so they have no images assigned.
-    spreads_deleted = 0
+    # --- 1. Delete original template body pages ---
+    pages_deleted = 0
     pages_to_remove = []
     for page in section.findall('page'):
         pn = page.get('number')
         if not pn or not pn.lstrip('-').isdigit():
             continue
         pn_int = int(pn)
-        if pn_int < 1:
-            continue
-        # Check if any container extends beyond page width
-        off_page = False
-        for c in page.findall('.//container'):
-            x = float(c.get('x', 0))
-            w = float(c.get('width', 0))
-            if x + w > page_width + 1:  # 1pt tolerance
-                off_page = True
-                break
-        if off_page:
+        if 1 <= pn_int <= max_existing:
             pages_to_remove.append(page)
 
     for page in pages_to_remove:
         section.remove(page)
-        spreads_deleted += 1
+        pages_deleted += 1
 
     # --- 2. Strip spread attribute and renumber pages sequentially from 1 ---
     # New pages inherit spread="true" from cloned template pages, which causes
@@ -260,7 +238,7 @@ def clean_template_pages(section, max_existing, page_width=693):
         page.set('number', str(page_num))
         page_num += 1
 
-    # --- 2. Replace text in pages with "Lorem ipsum" ---
+    # --- 3. Replace text in new pages with "Lorem ipsum" ---
     text_pages_replaced = 0
     for page in section.findall('page'):
         pn = page.get('number')
@@ -296,14 +274,10 @@ def clean_template_pages(section, max_existing, page_width=693):
     # --- 4. Summary ---
     total_pages = page_num - 1
     print()
-    parts = []
-    if spreads_deleted:
-        parts.append(f"deleted {spreads_deleted} spread pages")
-    parts.append(f"renumbered {total_pages} pages (1-{total_pages})")
-    if spreads_removed:
-        parts.append(f"stripped {spreads_removed} spread attributes")
-    parts.append(f"replaced text in {text_pages_replaced} pages")
-    print(f"Template cleanup: {', '.join(parts)}")
+    print(f"Template cleanup: deleted {pages_deleted} original template pages, "
+          f"renumbered {total_pages} pages (1-{total_pages}), "
+          f"removed {spreads_removed} spread attributes, "
+          f"replaced text in {text_pages_replaced} new pages")
 
 
 def process_all_batches(blurb_file):
@@ -607,12 +581,9 @@ def process_all_batches(blurb_file):
 
     # Count template images (they're already in the archive)
     # We can estimate this by counting XML refs in template pages
-    fc_result = subprocess.run(['sqlite3', blurb_file,
+    subprocess.run(['sqlite3', blurb_file,
                    "SELECT writefile('/tmp/bbf2_final_check.xml', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
-                  capture_output=True, text=True)
-    if fc_result.returncode != 0:
-        print(f"ERROR extracting bbf2.xml for verification: {fc_result.stderr.strip()}")
-        sys.exit(1)
+                  capture_output=True)
     verify_tree = ET.parse('/tmp/bbf2_final_check.xml')
     verify_section = verify_tree.getroot().find('.//section[@name=""]')
 
@@ -638,16 +609,12 @@ def process_all_batches(blurb_file):
         print(f"{len(page_nums)} pages numbered 1-{len(page_nums)} (sequential, no spreads)")
 
     # Count media registry entries
-    mr_result = subprocess.run(['sqlite3', blurb_file,
+    subprocess.run(['sqlite3', blurb_file,
                    "SELECT writefile('/tmp/media_registry_final.xml', filecontent) FROM Files WHERE filepath='media_registry.xml';"],
-                  capture_output=True, text=True)
-    media_count = 0
-    if mr_result.returncode == 0 and os.path.exists('/tmp/media_registry_final.xml'):
-        mr_verify = ET.parse('/tmp/media_registry_final.xml')
-        mr_images = mr_verify.getroot().find('.//images')
-        media_count = len(mr_images.findall('media')) if mr_images is not None else 0
-    else:
-        print(f"⚠️  Could not read media registry: {mr_result.stderr.strip()}")
+                  capture_output=True)
+    mr_verify = ET.parse('/tmp/media_registry_final.xml')
+    mr_images = mr_verify.getroot().find('.//images')
+    media_count = len(mr_images.findall('media')) if mr_images is not None else 0
 
     expected = sum(len(b['images']) for b in state['batches'])
 
@@ -673,8 +640,7 @@ def process_all_batches(blurb_file):
         print(f"✓ Media registry: {media_count} entries")
 
     print("=" * 60)
-    total_page_count = len(page_nums)
-    print(f"{pages_created} new pages added ({total_page_count} total pages including template)")
+    print(f"{pages_created} pages created (1-{pages_created})")
     print("=" * 60)
 
     # Cleanup verification files
