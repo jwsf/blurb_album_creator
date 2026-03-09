@@ -9,6 +9,10 @@ outputs/
 samples/*.blurb
 samples/*.pdf
 
+# SQLite journal files (WAL mode)
+*.blurb-shm
+*.blurb-wal
+
 # Python
 __pycache__/
 *.pyc

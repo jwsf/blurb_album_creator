@@ -65,7 +65,10 @@
       "Bash(git -C /Users/jowilson/Code/blurb_album_creator push)",
       "Bash(git -C /Users/jowilson/Code/blurb_album_creator add .claude/rules/auto-push-changes.md)",
       "Bash(git -C /Users/jowilson/Code/blurb_album_creator commit -m \"$\\(cat <<''EOF''\nAdd auto-push rule for skills, rules, and scripts\n\nEnsures all changes to .claude/ tracked paths are committed and pushed\nto GitHub automatically.\n\nCo-Authored-By: Claude \\(global.anthropic.claude-opus-4-6-v1\\) <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(git status:*)",
+      "Bash(git checkout:*)",
+      "Bash(git check-ignore:*)"
     ]
   }
 }
