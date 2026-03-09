@@ -3078,14 +3078,31 @@ if masterpage is not None:
 else:
     err("<masterpage> section is missing")
 
-# Covers
-required_covers = ["softcover", "imagewrap", "dustjacket", "ebook"]
-found_covers = [c.get("type") for c in root.findall("cover")]
+# Covers — detect by type= attribute or sku= attribute pattern
+# Some templates use sku="PHBK-...-IW-..." instead of type="imagewrap", etc.
+sku_to_cover = {"-IW-": "imagewrap", "-SC-": "softcover", "-DJ-": "dustjacket"}
+found_covers = set()
+for c in root.findall("cover"):
+    ct = c.get("type", "")
+    if ct:
+        found_covers.add(ct)
+    sku = c.get("sku", "")
+    for pattern, cover_name in sku_to_cover.items():
+        if pattern in sku:
+            found_covers.add(cover_name)
+
+required_covers = ["softcover", "imagewrap", "dustjacket"]
 for ct in required_covers:
     if ct in found_covers:
         ok(f"<cover type=\"{ct}\"> present")
     else:
         err(f"<cover type=\"{ct}\"> is missing")
+
+# Ebook is optional — not all templates include it
+if "ebook" in found_covers:
+    ok('<cover type="ebook"> present')
+else:
+    warn('<cover type="ebook"> not found (optional)')
 
 # ── 8. Section and page numbering ───────────────────────────
 print("\n[8] Content section and page numbering")
@@ -3245,22 +3262,39 @@ if title:
     spine_covers = ["softcover", "imagewrap", "dustjacket"]
     for cover in root.findall("cover"):
         ct = cover.get("type", "")
+        # Also detect cover type by SKU pattern
+        sku = cover.get("sku", "")
+        if not ct or ct not in spine_covers:
+            for pat, cname in {"-IW-": "imagewrap", "-SC-": "softcover", "-DJ-": "dustjacket"}.items():
+                if pat in sku:
+                    ct = cname
+                    break
         if ct not in spine_covers:
             continue
+        # Look for spineText in both <spine> and <coversheet> elements
+        spine_parents = []
         spine = cover.find("spine")
-        if spine is None:
+        if spine is not None:
+            spine_parents.append(spine)
+        coversheet = cover.find("coversheet")
+        if coversheet is not None:
+            spine_parents.append(coversheet)
+        if not spine_parents:
             continue
-        for cont in spine.findall('.//container[@role="spineText"]'):
-            text_el = cont.find("text")
-            if text_el is not None and text_el.text:
-                spine_text = text_el.text.strip()
-                # Strip HTML/CDATA wrapping to get raw text
-                import re
-                raw = re.sub(r'<[^>]+>', '', spine_text).strip()
-                if title.lower() in raw.lower():
-                    ok(f"{ct} spine contains title")
-                elif raw:
-                    warn(f"{ct} spine text '{raw[:40]}...' may not match title '{title}'")
+        found_title = False
+        for parent in spine_parents:
+            for cont in parent.findall('.//container[@role="spineText"]'):
+                text_el = cont.find("text")
+                if text_el is not None and text_el.text:
+                    spine_text = text_el.text.strip()
+                    import re
+                    raw = re.sub(r'<[^>]+>', '', spine_text).strip()
+                    if title.lower() in raw.lower():
+                        found_title = True
+        if found_title:
+            ok(f"{ct} spine contains title")
+        else:
+            warn(f"{ct} spine may not contain title '{title}'")
 
 # ── Summary ─────────────────────────────────────────────────
 conn.close()
@@ -3294,7 +3328,7 @@ INTEGRITY_CHECK
 | 4 | Required files present (bbf2.xml, project_settings.json, media_registry.xml) | Error |
 | 5 | bbf2.xml parses as valid XML with `<book>` root | Error |
 | 6 | Title and author are non-empty | Error |
-| 7 | Protected elements present (masterpage, all 4 cover types) | Error |
+| 7 | Protected elements present (masterpage, 3 required covers by type/sku; ebook optional) | Error/Warning |
 | 8 | Content pages numbered sequentially without gaps or duplicates | Error/Warning |
 | 9 | Image `src` attributes are filename-only; images exist in archive; `autolayout="fill"` set | Error/Warning |
 | 10 | Media registry entries exist for all image GUIDs used in pages | Error |
@@ -3343,7 +3377,7 @@ BLURB INTEGRITY CHECK: My Album 2026-03-09 14:30.blurb
   OK:   <cover type="softcover"> present
   OK:   <cover type="imagewrap"> present
   OK:   <cover type="dustjacket"> present
-  OK:   <cover type="ebook"> present
+  WARN: <cover type="ebook"> not found (optional)
 
 [8] Content section and page numbering
   OK:   <section> present
@@ -3370,7 +3404,7 @@ BLURB INTEGRITY CHECK: My Album 2026-03-09 14:30.blurb
   OK:   dustjacket spine contains title
 
 ============================================================
-RESULTS: 0 errors, 0 warnings
+RESULTS: 0 errors, 1 warning
 INTEGRITY CHECK PASSED
 ============================================================
 ```

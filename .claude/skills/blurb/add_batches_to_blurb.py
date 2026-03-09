@@ -23,6 +23,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 
 def load_batcher_state():
@@ -395,12 +396,14 @@ def replace_text_on_template_pages(raw_xml, max_existing_page):
 def build_media_entry(img):
     """Build a media registry XML entry as a string."""
     modified_date = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    # Escape src path to handle filenames with &, <, >, or "
+    safe_src = escape(img["path"], {'"': '&quot;'})
     return (
         f'<media modified="{modified_date}" height="{img["height"]}" '
         f'dateTaken="" webImportAlbum="" enhanceable="UNKNOWN" validated="true" '
         f'guid="{img["guid"]}" ext="{img["ext"]}" width="{img["width"]}" '
         f'importBatchNum="1" cameraModel="unknown" designerImage="false" '
-        f'cameraMake="unknown" src="{img["path"]}" webImportSource=""/>'
+        f'cameraMake="unknown" src="{safe_src}" webImportSource=""/>'
     )
 
 
@@ -664,16 +667,33 @@ def process_all_batches(blurb_file):
     with open('/tmp/media_registry.xml', 'r', encoding='utf-8') as f:
         mr_xml = f.read()
 
+    # Truncate at first </medialist> to discard any trailing garbage
+    # (some templates have corrupt data after the closing tag)
+    end_tag = '</medialist>'
+    end_idx = mr_xml.find(end_tag)
+    if end_idx != -1:
+        truncated = mr_xml[end_idx + len(end_tag):]
+        if truncated.strip():
+            print(f"  Cleaned {len(truncated):,} bytes of trailing data after </medialist>")
+        mr_xml = mr_xml[:end_idx + len(end_tag)]
+
     # Build media entries
     media_entries = '\n'.join(build_media_entry(img) for img in all_image_data)
 
-    # Insert before </images>
+    # Insert before </images> (count=1 to avoid corrupting XML when multiple </images> exist)
     if '</images>' in mr_xml:
-        mr_xml = mr_xml.replace('</images>', f'{media_entries}\n</images>')
+        mr_xml = mr_xml.replace('</images>', f'{media_entries}\n</images>', 1)
     elif '<images/>' in mr_xml:
-        mr_xml = mr_xml.replace('<images/>', f'<images>\n{media_entries}\n</images>')
+        mr_xml = mr_xml.replace('<images/>', f'<images>\n{media_entries}\n</images>', 1)
     else:
         print("WARNING: Could not find <images> element in media_registry.xml")
+
+    # Validate media_registry.xml is well-formed before writing to archive
+    try:
+        ET.fromstring(mr_xml)
+    except ET.ParseError as e:
+        print(f"ERROR: media_registry.xml is not valid XML after update: {e}")
+        sys.exit(1)
 
     with open('/tmp/media_registry_updated.xml', 'w', encoding='utf-8') as f:
         f.write(mr_xml)
