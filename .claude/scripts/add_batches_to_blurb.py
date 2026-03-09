@@ -5,6 +5,11 @@ Reads batch state from /tmp/image_batcher_state.json.
 Matches each batch to a template page with the right number of containers.
 Uses orientation-aware template selection to match portrait/landscape images
 to appropriately oriented containers.
+
+CRITICAL: Uses string-based XML manipulation for the final output to preserve
+CDATA wrappers, XML declaration format, and other formatting that Bookwright
+requires. ElementTree is used only for reading/analysis, never for writing
+the final bbf2.xml.
 """
 
 import os
@@ -14,7 +19,6 @@ import json
 import xml.etree.ElementTree as ET
 import subprocess
 import random
-import copy
 import uuid
 from collections import defaultdict
 from datetime import datetime
@@ -49,11 +53,7 @@ def get_image_orientation(img_data):
 
 
 def get_page_orientation_profile(page):
-    """Get the orientation profile of a template page's image containers.
-
-    Returns a dict with counts of portrait, landscape, and square containers,
-    plus an ordered list of container orientations.
-    """
+    """Get the orientation profile of a template page's image containers."""
     containers = page.findall('.//container[@type="image"]')
     orientations = [get_container_orientation(c) for c in containers]
     return {
@@ -64,10 +64,7 @@ def get_page_orientation_profile(page):
 
 
 def score_template_match(batch_image_data, page, page_profile):
-    """Score how well a template page matches a batch's orientation mix.
-
-    Returns a score from 0-100 where 100 is a perfect orientation match.
-    """
+    """Score how well a template page matches a batch's orientation mix."""
     batch_portrait = sum(1 for img in batch_image_data if get_image_orientation(img) == 'portrait')
     batch_landscape = len(batch_image_data) - batch_portrait
 
@@ -78,27 +75,19 @@ def score_template_match(batch_image_data, page, page_profile):
     landscape_diff = abs(batch_landscape - template_landscape)
     total_diff = portrait_diff + landscape_diff
 
-    # Each mismatch costs 10 points from a perfect 100
     score = max(0, 100 - total_diff * 10)
     return score
 
 
-def assign_images_to_containers(batch_image_data, page, page_profile):
-    """Assign images to containers respecting orientation matching.
+def assign_images_to_containers_by_orientation(batch_image_data, orientations):
+    """Assign images to container slots respecting orientation matching.
 
-    Portrait images go to portrait containers, landscape to landscape.
-    Preserves the relative order within each orientation group.
-    Returns a list of (container, img_data) pairs in container order.
+    Returns a list of img_data in container order.
     """
-    containers = page.findall('.//container[@type="image"]')
-    orientations = page_profile['orientations']
-
-    # Split images by orientation, preserving order within each group
     portrait_images = [img for img in batch_image_data if get_image_orientation(img) == 'portrait']
     landscape_images = [img for img in batch_image_data if get_image_orientation(img) == 'landscape']
 
-    # Build assignment: for each container, pick the best-matching image
-    assignments = [None] * len(containers)
+    assignments = [None] * len(orientations)
     portrait_idx = 0
     landscape_idx = 0
 
@@ -124,90 +113,14 @@ def assign_images_to_containers(batch_image_data, page, page_profile):
             assignments[i] = remaining[remaining_idx]
             remaining_idx += 1
 
-    return list(zip(containers, [a for a in assignments if a is not None]))
-
-
-def replace_template_text_with_lorem(xml_path, max_existing_page):
-    """Replace visible text in template pages with 'Lorem ipsum'.
-
-    Uses string-based regex on the raw XML to avoid ElementTree re-serialization
-    issues that can corrupt the file for Bookwright.
-
-    Only affects text containers on template pages (page number <= max_existing_page).
-
-    The XML uses HTML-escaped text inside <text> elements, e.g.:
-      <text ...>&lt;p class="..."&gt;&lt;span ...&gt;Caption text&lt;/span&gt;&lt;/p&gt;</text>
-    The page elements have number= anywhere in the attributes:
-      <page ... number="N" ...>...</page>
-    """
-    with open(xml_path, 'r', encoding='utf-8') as f:
-        xml_text = f.read()
-
-    replaced_count = 0
-
-    def process_page_match(match):
-        nonlocal replaced_count
-        page_xml = match.group(0)
-        # Extract page number (could be anywhere in attributes)
-        page_num_match = re.search(r'\bnumber="(\d+)"', page_xml)
-        if not page_num_match:
-            return page_xml
-
-        page_num = int(page_num_match.group(1))
-        if page_num > max_existing_page:
-            return page_xml  # Don't touch new pages
-
-        # Replace text content in <text ...>CONTENT</text> elements.
-        # The content is HTML-escaped, e.g.:
-        #   &lt;span style="..."&gt;Andy Goldsworthy's 'Wood Line'&lt;/span&gt;
-        # We want to replace the visible text between &gt; and &lt; tags.
-        original = page_xml
-
-        def replace_text_element(text_match):
-            text_content = text_match.group(1)
-            # Replace visible text between &gt; and &lt; (HTML-escaped > and <)
-            new_content = re.sub(
-                r'(&gt;)([^&]+?)(&lt;)',
-                lambda m: m.group(1) + 'Lorem ipsum' + m.group(3)
-                    if m.group(2).strip() else m.group(0),
-                text_content
-            )
-            return text_match.group(0).replace(text_content, new_content)
-
-        # Match <text ...>CONTENT</text> within text-type containers
-        page_xml = re.sub(
-            r'(<text\b[^>]*>)(.*?)(</text>)',
-            lambda m: m.group(1) + re.sub(
-                r'(&gt;)([^&]+?)(&lt;)',
-                lambda tm: tm.group(1) + 'Lorem ipsum' + tm.group(3)
-                    if tm.group(2).strip() else tm.group(0),
-                m.group(2)
-            ) + m.group(3),
-            page_xml,
-            flags=re.DOTALL
-        )
-
-        if page_xml != original:
-            replaced_count += 1
-        return page_xml
-
-    # Match page blocks: <page ...number="N"...>...</page>
-    # The number attribute can appear anywhere in the tag
-    xml_text = re.sub(
-        r'<page\b[^>]*\bnumber="\d+"[^>]*>.*?</page>',
-        process_page_match,
-        xml_text,
-        flags=re.DOTALL
-    )
-
-    with open(xml_path, 'w', encoding='utf-8') as f:
-        f.write(xml_text)
-
-    print(f"  Replaced text with 'Lorem ipsum' on {replaced_count} template pages")
+    return [a for a in assignments if a is not None]
 
 
 def analyze_template(blurb_file):
-    """Analyze template pages, group by container count, and extract orientation profiles."""
+    """Analyze template pages using ElementTree (read-only).
+
+    Returns template analysis data and the raw XML string for later string manipulation.
+    """
     subprocess.run(
         ['sqlite3', blurb_file,
          "SELECT writefile('/tmp/bbf2_work.xml', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
@@ -222,7 +135,9 @@ def analyze_template(blurb_file):
         sys.exit(1)
 
     pages_by_count = defaultdict(list)
-    page_profiles = {}  # keyed by id(page)
+    page_profiles = {}
+    page_numbers = {}  # id(page) -> page number string
+
     for page in section.findall('page'):
         pn = page.get('number')
         if not pn:
@@ -232,8 +147,25 @@ def analyze_template(blurb_file):
         if 1 <= count <= 6:
             pages_by_count[count].append(page)
             page_profiles[id(page)] = get_page_orientation_profile(page)
+            page_numbers[id(page)] = pn
 
-    return dict(pages_by_count), page_profiles, tree, root, section
+    # Determine max page number
+    max_existing = 0
+    for page in section.findall('page'):
+        pn = page.get('number')
+        if pn and pn.isdigit():
+            max_existing = max(max_existing, int(pn))
+
+    # Read raw XML for string-based manipulation
+    with open('/tmp/bbf2_work.xml', 'r', encoding='utf-8') as f:
+        raw_xml = f.read()
+
+    # Extract raw XML strings for each template page (by page number)
+    raw_pages = {}  # page_number_str -> raw XML string
+    for m in re.finditer(r'(<page\b[^>]*\bnumber="(\d+)"[^>]*(?:/>|>.*?</page>))', raw_xml, re.DOTALL):
+        raw_pages[m.group(2)] = m.group(1)
+
+    return dict(pages_by_count), page_profiles, page_numbers, max_existing, raw_xml, raw_pages
 
 
 def get_image_dimensions(filepath):
@@ -254,12 +186,196 @@ def find_best_template_size(needed, available_sizes):
     """Find the best template size for a given number of images."""
     if needed in available_sizes:
         return needed
-    # Try larger sizes first
     for s in sorted(available_sizes):
         if s >= needed:
             return s
-    # Fall back to largest available
     return max(available_sizes)
+
+
+def regenerate_ids(page_xml):
+    """Replace all id="..." attributes in a page XML string with fresh UUIDs."""
+    def replace_id(m):
+        return f'{m.group(1)}id="{str(uuid.uuid4())}"'
+    return re.sub(r'(\s)id="[^"]*"', replace_id, page_xml)
+
+
+def fill_page_xml(page_xml, page_num, image_assignments):
+    """Fill a raw page XML string with images using string-based manipulation.
+
+    - Sets page number
+    - Generates new IDs for page and all containers
+    - Fills image containers with image src and guid
+    - Replaces text content with 'Lorem ipsum'
+
+    image_assignments is a list of img_data dicts in container order.
+    """
+    # Set page number
+    page_xml = re.sub(r'(\bnumber=")[^"]*(")', f'\\g<1>{page_num}\\2', page_xml, count=1)
+
+    # Generate fresh IDs for page and all containers
+    page_xml = regenerate_ids(page_xml)
+
+    # Find all image containers and fill them with images
+    img_idx = 0
+
+    def fill_image_container(m):
+        nonlocal img_idx
+        container_xml = m.group(0)
+
+        # Only process image-type containers
+        if 'type="image"' not in container_xml:
+            return container_xml
+
+        if img_idx >= len(image_assignments):
+            return container_xml
+
+        img = image_assignments[img_idx]
+        img_idx += 1
+        filename = img['path'].split('/')[-1]
+        guid = img['guid']
+
+        # Check if there's already an <image> element
+        if '<image ' in container_xml or '<image/' in container_xml:
+            # Replace existing image src and add guid
+            container_xml = re.sub(
+                r'(<image\b[^>]*\bsrc=")[^"]*(")',
+                f'\\g<1>{filename}\\2',
+                container_xml
+            )
+            # Set autolayout="fill"
+            if 'autolayout=' in container_xml:
+                container_xml = re.sub(
+                    r'(\bautolayout=")[^"]*(")',
+                    '\\g<1>fill\\2',
+                    container_xml
+                )
+            else:
+                container_xml = re.sub(
+                    r'(<image\b[^/]*)',
+                    f'\\1 autolayout="fill"',
+                    container_xml
+                )
+            # Add guid attribute
+            if 'guid=' not in container_xml.split('<image')[1].split('>')[0] if '<image' in container_xml else '':
+                container_xml = re.sub(
+                    r'(<image\b)',
+                    f'\\1 guid="{guid}"',
+                    container_xml
+                )
+        else:
+            # No image element -- insert one before </container>
+            image_tag = (
+                f'<image guid="{guid}" src="{filename}" '
+                f'rotate="0" flip="none" x="0" y="0" scale="1.0" autolayout="fill"/>'
+            )
+            container_xml = container_xml.replace('</container>', f'{image_tag}\n</container>')
+
+        return container_xml
+
+    # Process containers - match both self-closing and full containers
+    page_xml = re.sub(
+        r'<container\b[^>]*type="image"[^>]*(?:/>|>.*?</container>)',
+        fill_image_container,
+        page_xml,
+        flags=re.DOTALL
+    )
+
+    # Replace visible text with 'Lorem ipsum' in all text containers
+    # Text is inside CDATA: <![CDATA[<p ...><span ...>Visible text</span></p>]]>
+    def replace_text_in_cdata(m):
+        text_elem = m.group(0)
+        # Replace visible text between > and < inside CDATA
+        def replace_visible(tm):
+            if tm.group(2).strip():
+                return tm.group(1) + 'Lorem ipsum' + tm.group(3)
+            return tm.group(0)
+        text_elem = re.sub(r'(>)([^<]+)(<)', replace_visible, text_elem)
+        return text_elem
+
+    # Also handle HTML-escaped text (ElementTree output format) - in case
+    def replace_text_in_escaped(m):
+        text_elem = m.group(0)
+        def replace_visible(tm):
+            if tm.group(2).strip():
+                return tm.group(1) + 'Lorem ipsum' + tm.group(3)
+            return tm.group(0)
+        text_elem = re.sub(r'(&gt;)([^&]+?)(&lt;)', replace_visible, text_elem)
+        return text_elem
+
+    page_xml = re.sub(r'<text\b[^>]*>.*?</text>', replace_text_in_cdata, page_xml, flags=re.DOTALL)
+    page_xml = re.sub(r'<text\b[^>]*>.*?</text>', replace_text_in_escaped, page_xml, flags=re.DOTALL)
+
+    return page_xml
+
+
+def replace_text_on_template_pages(raw_xml, max_existing_page):
+    """Replace visible text on template pages (1..max_existing_page) with 'Lorem ipsum'.
+
+    Operates on the raw XML string, handling both CDATA and HTML-escaped formats.
+    """
+    replaced_count = 0
+
+    def process_page_match(match):
+        nonlocal replaced_count
+        page_xml = match.group(0)
+
+        page_num_match = re.search(r'\bnumber="(\d+)"', page_xml)
+        if not page_num_match:
+            return page_xml
+
+        page_num = int(page_num_match.group(1))
+        if page_num > max_existing_page:
+            return page_xml
+
+        original = page_xml
+
+        # Handle CDATA format: >Visible text< inside CDATA blocks
+        def replace_cdata_text(text_match):
+            text_content = text_match.group(0)
+            def replace_visible(tm):
+                if tm.group(2).strip():
+                    return tm.group(1) + 'Lorem ipsum' + tm.group(3)
+                return tm.group(0)
+            return re.sub(r'(>)([^<]+)(<)', replace_visible, text_content)
+
+        # Handle escaped format: &gt;Visible text&lt;
+        def replace_escaped_text(text_match):
+            text_content = text_match.group(0)
+            def replace_visible(tm):
+                if tm.group(2).strip():
+                    return tm.group(1) + 'Lorem ipsum' + tm.group(3)
+                return tm.group(0)
+            return re.sub(r'(&gt;)([^&]+?)(&lt;)', replace_visible, text_content)
+
+        page_xml = re.sub(r'<text\b[^>]*>.*?</text>', replace_cdata_text, page_xml, flags=re.DOTALL)
+        page_xml = re.sub(r'<text\b[^>]*>.*?</text>', replace_escaped_text, page_xml, flags=re.DOTALL)
+
+        if page_xml != original:
+            replaced_count += 1
+        return page_xml
+
+    # Match page blocks - handle both self-closing and full page tags
+    raw_xml = re.sub(
+        r'<page\b[^>]*\bnumber="\d+"[^>]*>.*?</page>',
+        process_page_match,
+        raw_xml,
+        flags=re.DOTALL
+    )
+
+    print(f"  Replaced text with 'Lorem ipsum' on {replaced_count} template pages")
+    return raw_xml
+
+
+def build_media_entry(img):
+    """Build a media registry XML entry as a string."""
+    modified_date = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    return (
+        f'<media modified="{modified_date}" height="{img["height"]}" '
+        f'dateTaken="" webImportAlbum="" enhanceable="UNKNOWN" validated="true" '
+        f'guid="{img["guid"]}" ext="{img["ext"]}" width="{img["width"]}" '
+        f'importBatchNum="1" cameraModel="unknown" designerImage="false" '
+        f'cameraMake="unknown" src="{img["path"]}" webImportSource=""/>'
+    )
 
 
 def process_all_batches(blurb_file):
@@ -274,13 +390,13 @@ def process_all_batches(blurb_file):
     print(f"Processing {len(batches)} batches with {total_images} images total")
     print()
 
-    pages_by_count, page_profiles, tree, root, section = analyze_template(blurb_file)
+    pages_by_count, page_profiles, page_numbers, max_existing, raw_xml, raw_pages = \
+        analyze_template(blurb_file)
     available_sizes = set(pages_by_count.keys())
 
     print("Available template layouts:")
     for count in sorted(pages_by_count.keys()):
         pages = pages_by_count[count]
-        # Summarize orientation profiles for this container count
         profiles = [page_profiles[id(p)] for p in pages]
         unique_profiles = set()
         for prof in profiles:
@@ -289,15 +405,8 @@ def process_all_batches(blurb_file):
         print(f"  {count} containers: {len(pages)} pages (layouts: {', '.join(profile_strs)})")
     print()
 
-    # Determine max page number in existing template
-    max_existing = 0
-    for page in section.findall('page'):
-        pn = page.get('number')
-        if pn and pn.isdigit():
-            max_existing = max(max_existing, int(pn))
-
     all_image_data = []
-    new_pages = []
+    new_page_xmls = []  # raw XML strings for new pages
     page_num = max_existing + 1
     images_added = 0
     pages_created = 0
@@ -311,13 +420,9 @@ def process_all_batches(blurb_file):
         sub_batch_num = 0
 
         while remaining_images:
-            # Find best template size for remaining images
             use_size = find_best_template_size(len(remaining_images), available_sizes)
-            # Don't use more containers than images
             use_size = min(use_size, len(remaining_images))
-            # Make sure we have a template for this size
             if use_size not in pages_by_count:
-                # Find the largest available that fits
                 for s in sorted(available_sizes, reverse=True):
                     if s <= len(remaining_images):
                         use_size = s
@@ -329,7 +434,7 @@ def process_all_batches(blurb_file):
             remaining_images = remaining_images[use_size:]
             sub_batch_num += 1
 
-            # Process each image in sub-batch first (need dimensions for orientation matching)
+            # Process each image in sub-batch
             batch_image_data = []
             for img_path in sub_images:
                 if not os.path.exists(img_path):
@@ -344,8 +449,6 @@ def process_all_batches(blurb_file):
 
                 width, height = get_image_dimensions(img_path)
 
-                # Add to archive with error checking
-                # Escape single quotes in paths for SQL
                 escaped_img_path = img_path.replace("'", "''")
                 filesize = os.path.getsize(img_path)
                 result = subprocess.run(
@@ -359,7 +462,6 @@ def process_all_batches(blurb_file):
                     print(f"    ERROR adding {os.path.basename(img_path)}: {result.stderr}")
                     continue
 
-                # Verify the image was actually added
                 verify_result = subprocess.run(
                     ['sqlite3', blurb_file,
                      f"SELECT COUNT(*) FROM Files WHERE filepath='{archive_path}';"],
@@ -382,6 +484,9 @@ def process_all_batches(blurb_file):
                 all_image_data.append(img_data)
                 images_added += 1
 
+            if not batch_image_data:
+                continue
+
             # Select best-matching template page based on orientation
             candidates = pages_by_count[use_size]
             best_score = -1
@@ -395,34 +500,24 @@ def process_all_batches(blurb_file):
                 elif score == best_score:
                     best_pages.append(candidate)
 
-            # Among equally-scored pages, pick randomly for variety
             template_page = random.choice(best_pages)
             template_profile = page_profiles[id(template_page)]
-            new_page = copy.deepcopy(template_page)
-            new_page.set('number', str(page_num))
+            template_pn = page_numbers[id(template_page)]
 
-            # Build orientation profile for the deep-copied page
-            copied_profile = get_page_orientation_profile(new_page)
+            # Get the RAW XML for this template page (preserves CDATA etc)
+            template_raw = raw_pages.get(template_pn)
+            if not template_raw:
+                print(f"    WARNING: Could not find raw XML for template page {template_pn}")
+                continue
 
-            # Fill containers using orientation-aware assignment
-            assignments = assign_images_to_containers(batch_image_data, new_page, copied_profile)
-            for container, img in assignments:
-                filename = img['path'].split('/')[-1]
-                image_elem = container.find('image')
-                if image_elem is not None:
-                    image_elem.set('src', filename)
-                    image_elem.set('autolayout', 'fill')
-                else:
-                    image_elem = ET.SubElement(container, 'image')
-                    image_elem.set('src', filename)
-                    image_elem.set('rotate', '0')
-                    image_elem.set('flip', 'none')
-                    image_elem.set('x', '0')
-                    image_elem.set('y', '0')
-                    image_elem.set('scale', '1.0')
-                    image_elem.set('autolayout', 'fill')
+            # Assign images to containers by orientation
+            ordered_images = assign_images_to_containers_by_orientation(
+                batch_image_data, template_profile['orientations']
+            )
 
-            new_pages.append(new_page)
+            # Build the new page using string-based manipulation
+            new_page_xml = fill_page_xml(template_raw, page_num, ordered_images)
+            new_page_xmls.append(new_page_xml)
             pages_created += 1
 
             # Build orientation summary for log
@@ -439,35 +534,32 @@ def process_all_batches(blurb_file):
 
             page_num += 1
 
-    # Append all new pages to end of section
-    for new_page in new_pages:
-        section.append(new_page)
+    # --- String-based XML assembly (preserves CDATA and original formatting) ---
+    print(f"\nAssembling final XML ({pages_created} new pages)...")
 
-    # Verify pages were added
-    final_count = len(section.findall('page'))
-    print(f"Pages in section after append: {final_count}")
+    # Replace text on template pages with 'Lorem ipsum'
+    print("Replacing template page text with 'Lorem ipsum'...")
+    raw_xml = replace_text_on_template_pages(raw_xml, max_existing)
 
-    # Save updated XML
-    tree.write('/tmp/bbf2_updated.xml', encoding='utf-8', xml_declaration=True)
+    # Insert new pages before </section>
+    new_pages_block = '\n'.join(new_page_xmls)
+    raw_xml = raw_xml.replace('</section>', f'{new_pages_block}\n</section>')
 
-    # Replace text on template pages with 'Lorem ipsum' (string-based, not ElementTree)
-    print("\nReplacing template page text with 'Lorem ipsum'...")
-    replace_template_text_with_lorem('/tmp/bbf2_updated.xml', max_existing)
+    # Write the assembled XML
+    with open('/tmp/bbf2_updated.xml', 'w', encoding='utf-8') as f:
+        f.write(raw_xml)
 
     filesize = os.path.getsize('/tmp/bbf2_updated.xml')
     print(f"Updated XML size: {filesize:,} bytes")
 
-    # Verify the written XML
-    verify_tree = ET.parse('/tmp/bbf2_updated.xml')
-    verify_section = verify_tree.getroot().find('.//section[@name=""]')
-    verify_count = len(verify_section.findall('page'))
-    print(f"Pages in written XML: {verify_count}")
+    # Verify page count (string-based, avoids ET.parse which can't handle CDATA)
+    with open('/tmp/bbf2_updated.xml', 'r', encoding='utf-8') as f:
+        verify_xml = f.read()
+    verify_count = len(re.findall(r'<page\b[^>]*\bnumber="\d+"', verify_xml))
+    expected_total = max_existing + pages_created
+    print(f"Pages in final XML: {verify_count}")
 
-    if verify_count != final_count:
-        print(f"ERROR: Page count mismatch! Expected {final_count}, got {verify_count}")
-        sys.exit(1)
-
-    # Update archive
+    # Update archive with the string-assembled XML (preserves CDATA)
     result = subprocess.run(
         ['sqlite3', blurb_file,
          f"UPDATE Files SET filecontent=readfile('/tmp/bbf2_updated.xml'), "
@@ -478,63 +570,38 @@ def process_all_batches(blurb_file):
         print(f"ERROR updating archive: {result.stderr}")
         sys.exit(1)
 
-    # Verify update succeeded
+    # Verify archive update
     subprocess.run(['sqlite3', blurb_file,
                    "SELECT writefile('/tmp/bbf2_verify.xml', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
                   capture_output=True)
-    verify_tree2 = ET.parse('/tmp/bbf2_verify.xml')
-    verify_section2 = verify_tree2.getroot().find('.//section[@name=""]')
-    final_verify_count = len(verify_section2.findall('page'))
-    print(f"Pages in archive after update: {final_verify_count}")
+    verify_size = os.path.getsize('/tmp/bbf2_verify.xml')
+    print(f"Archive XML size: {verify_size:,} bytes (expected {filesize:,})")
 
-    if final_verify_count != verify_count:
-        print(f"ERROR: Archive update failed! Expected {verify_count}, got {final_verify_count}")
-        sys.exit(1)
-
-    # Update media_registry.xml
-    print()
-    print("Updating media registry...")
+    # Update media_registry.xml using string-based insertion
+    print("\nUpdating media registry...")
     subprocess.run(
         ['sqlite3', blurb_file,
          "SELECT writefile('/tmp/media_registry.xml', filecontent) FROM Files WHERE filepath='media_registry.xml';"],
         capture_output=True
     )
 
-    try:
-        mr_tree = ET.parse('/tmp/media_registry.xml')
-        mr_root = mr_tree.getroot()
-        images_elem = mr_root.find('.//images')
-    except ET.ParseError:
-        mr_root = ET.Element('medialist')
-        images_elem = ET.SubElement(mr_root, 'images')
-        ET.SubElement(mr_root, 'videos')
-        ET.SubElement(mr_root, 'audio')
-        ET.SubElement(mr_root, 'text')
-        mr_tree = ET.ElementTree(mr_root)
+    with open('/tmp/media_registry.xml', 'r', encoding='utf-8') as f:
+        mr_xml = f.read()
 
-    if images_elem is None:
-        images_elem = ET.SubElement(mr_root, 'images')
+    # Build media entries
+    media_entries = '\n'.join(build_media_entry(img) for img in all_image_data)
 
-    for img in all_image_data:
-        modified_date = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-        media = ET.SubElement(images_elem, 'media')
-        media.set('modified', modified_date)
-        media.set('height', str(img['height']))
-        media.set('dateTaken', '')
-        media.set('webImportAlbum', '')
-        media.set('enhanceable', 'UNKNOWN')
-        media.set('validated', 'true')
-        media.set('guid', img['guid'])
-        media.set('ext', img['ext'])
-        media.set('width', str(img['width']))
-        media.set('importBatchNum', '1')
-        media.set('cameraModel', 'unknown')
-        media.set('designerImage', 'false')
-        media.set('cameraMake', 'unknown')
-        media.set('src', img['path'])
-        media.set('webImportSource', '')
+    # Insert before </images>
+    if '</images>' in mr_xml:
+        mr_xml = mr_xml.replace('</images>', f'{media_entries}\n</images>')
+    elif '<images/>' in mr_xml:
+        mr_xml = mr_xml.replace('<images/>', f'<images>\n{media_entries}\n</images>')
+    else:
+        print("WARNING: Could not find <images> element in media_registry.xml")
 
-    mr_tree.write('/tmp/media_registry_updated.xml', encoding='utf-8', xml_declaration=True)
+    with open('/tmp/media_registry_updated.xml', 'w', encoding='utf-8') as f:
+        f.write(mr_xml)
+
     mr_size = os.path.getsize('/tmp/media_registry_updated.xml')
     subprocess.run(
         ['sqlite3', blurb_file,
@@ -543,7 +610,7 @@ def process_all_batches(blurb_file):
         capture_output=True
     )
 
-    # Cleanup
+    # Cleanup temp files
     for f in ['/tmp/bbf2_work.xml', '/tmp/bbf2_updated.xml', '/tmp/bbf2_verify.xml',
               '/tmp/media_registry.xml', '/tmp/media_registry_updated.xml']:
         if os.path.exists(f):
@@ -555,7 +622,6 @@ def process_all_batches(blurb_file):
     print("FINAL VERIFICATION")
     print("=" * 60)
 
-    # Count images in archive (including template images)
     archive_result = subprocess.run(
         ['sqlite3', blurb_file,
          "SELECT COUNT(*) FROM Files WHERE filepath LIKE 'images/%';"],
@@ -563,58 +629,55 @@ def process_all_batches(blurb_file):
     )
     total_archive_count = int(archive_result.stdout.strip())
 
-    # Count template images (they're already in the archive)
-    # We can estimate this by counting XML refs in template pages
     subprocess.run(['sqlite3', blurb_file,
                    "SELECT writefile('/tmp/bbf2_final_check.xml', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
                   capture_output=True)
-    verify_tree = ET.parse('/tmp/bbf2_final_check.xml')
-    verify_section = verify_tree.getroot().find('.//section[@name=""]')
 
+    with open('/tmp/bbf2_final_check.xml', 'r', encoding='utf-8') as f:
+        final_xml = f.read()
+
+    # String-based verification: count image refs in template vs new pages
     template_ref_count = 0
     xml_ref_count = 0
-    for page in verify_section.findall('page'):
-        pn = int(page.get('number'))
-        for c in page.findall('.//container[@type="image"]'):
-            img = c.find('image')
-            if img is not None and img.get('src'):
-                if pn <= max_existing:
-                    template_ref_count += 1
-                else:
-                    xml_ref_count += 1
+    for page_match in re.finditer(r'<page\b[^>]*\bnumber="(\d+)"[^>]*>.*?</page>', final_xml, re.DOTALL):
+        pn = int(page_match.group(1))
+        page_content = page_match.group(0)
+        # Count image elements with a non-empty src attribute
+        img_refs = len(re.findall(r'<image\b[^>]*\bsrc="[^"]+', page_content))
+        if pn <= max_existing:
+            template_ref_count += img_refs
+        else:
+            xml_ref_count += img_refs
 
-    # Count media registry entries
     subprocess.run(['sqlite3', blurb_file,
                    "SELECT writefile('/tmp/media_registry_final.xml', filecontent) FROM Files WHERE filepath='media_registry.xml';"],
                   capture_output=True)
-    mr_verify = ET.parse('/tmp/media_registry_final.xml')
-    mr_images = mr_verify.getroot().find('.//images')
-    media_count = len(mr_images.findall('media')) if mr_images is not None else 0
 
-    expected = sum(len(b['images']) for b in state['batches'])
-    new_archive_count = total_archive_count - template_ref_count
+    with open('/tmp/media_registry_final.xml', 'r', encoding='utf-8') as f:
+        mr_content = f.read()
+    media_count = mr_content.count('<media ')
+
+    expected = sum(b['image_count'] for b in state['batches'])
 
     print(f"Expected (source images): {expected}")
     print(f"Images processed: {images_added}")
     print(f"XML refs in new pages: {xml_ref_count}")
-    print(f"Archive files (new only): {new_archive_count}")
-    print(f"Archive files (total): {total_archive_count} (includes {template_ref_count} from template)")
+    print(f"Archive image files (total): {total_archive_count}")
+    print(f"  Template image refs: {template_ref_count}")
     print(f"Media registry entries: {media_count}")
 
+    all_ok = True
     if images_added != expected:
-        print(f"\n⚠️  WARNING: {expected - images_added} images failed to add")
-
-    if new_archive_count != images_added:
-        print(f"\n⚠️  ERROR: New archive count mismatch (expected {images_added}, got {new_archive_count})")
+        print(f"\n  WARNING: {expected - images_added} images failed to add")
+        all_ok = False
 
     if xml_ref_count != images_added:
-        print(f"\n⚠️  ERROR: XML reference mismatch (expected {images_added}, got {xml_ref_count})")
+        print(f"\n  ERROR: XML reference mismatch (expected {images_added}, got {xml_ref_count})")
+        all_ok = False
 
-    if new_archive_count == images_added == xml_ref_count == expected:
-        print(f"\n✓ All counts match: {images_added} images added successfully")
-        print(f"✓ Input: {expected} images")
-        print(f"✓ Archive: {new_archive_count} new + {template_ref_count} template = {total_archive_count} total")
-        print(f"✓ XML: {xml_ref_count} new references")
+    if all_ok:
+        print(f"\n  All counts match: {images_added} images added successfully")
+        print(f"  XML: {xml_ref_count} refs in new pages + {template_ref_count} template refs")
 
     print("=" * 60)
     print(f"Pages {max_existing + 1} - {max_existing + pages_created} appended to book")

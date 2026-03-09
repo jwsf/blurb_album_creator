@@ -2,27 +2,27 @@
 
 ## Rule
 
-When generating a .blurb file, the output filename must include a timestamp in the format `YYYY-MM-DD HH.MM`.
+When generating a .blurb file, the output filename must include a timestamp in the format `YYYY-MM-DD HH:MM`.
 
 ## Example
 
 If the book title is "My Photo Album", the output file should be:
 
 ```
-outputs/My Photo Album 2026-03-08 15.30.blurb
+outputs/My Photo Album 2026-03-08 15:30.blurb
 ```
 
 ## Format
 
 ```
-<title> <YYYY-MM-DD HH.MM>.blurb
+<title> <YYYY-MM-DD HH:MM>.blurb
 ```
 
 - Use the current local time at the moment of file creation
 - Use 24-hour time format
-- Use a period `.` between hours and minutes (colons are not allowed in macOS filenames)
 - Separate date and time with a space
 - Place the timestamp after the title, separated by a space
+- Note: macOS Finder displays colons as forward slashes — this is expected
 
 ## Applies To
 
