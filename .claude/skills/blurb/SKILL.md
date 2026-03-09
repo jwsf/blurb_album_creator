@@ -2867,6 +2867,7 @@ When invoked with `/blurb` or when user mentions "photo album", "album", or "boo
 8. **Format output** in a readable way
 9. **Report** success or errors clearly
 10. **Suggest** next steps if applicable
+11. **Run integrity check** (MANDATORY final step — see "Integrity Check" section below)
 
 ## Verification and Testing
 
@@ -2954,6 +2955,425 @@ Before considering image addition complete:
 **Symptom: Empty pages created**
 - Check: Image src is actually set (not empty or missing)
 - Check: Image element exists in container (not just container)
+
+## Integrity Check (MANDATORY Final Step)
+
+**CRITICAL**: After ANY operation that creates or modifies a .blurb file, run this integrity check before reporting success. If any check fails, fix the issue before finishing.
+
+Run the following Python script against the completed .blurb file. Replace `BLURB_PATH` with the actual output path.
+
+```bash
+python3 << 'INTEGRITY_CHECK'
+import sqlite3, sys, json, os
+
+BLURB_PATH = "outputs/REPLACE_ME.blurb"
+errors = []
+warnings = []
+
+def err(msg):
+    errors.append(msg)
+    print(f"  FAIL: {msg}")
+
+def warn(msg):
+    warnings.append(msg)
+    print(f"  WARN: {msg}")
+
+def ok(msg):
+    print(f"  OK:   {msg}")
+
+print(f"\n{'='*60}")
+print(f"BLURB INTEGRITY CHECK: {os.path.basename(BLURB_PATH)}")
+print(f"{'='*60}")
+
+# ── 1. SQLite validity ──────────────────────────────────────
+print("\n[1] SQLite database validity")
+try:
+    conn = sqlite3.connect(BLURB_PATH)
+    conn.execute("PRAGMA integrity_check")
+    ok("SQLite database is valid")
+except Exception as e:
+    err(f"SQLite database is corrupt: {e}")
+    sys.exit(1)
+
+# ── 2. Required tables ──────────────────────────────────────
+print("\n[2] Required tables")
+tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+for t in ("Files", "ArchiveVersion"):
+    if t in tables:
+        ok(f"Table '{t}' exists")
+    else:
+        err(f"Table '{t}' is missing")
+
+# ── 3. Archive version ──────────────────────────────────────
+print("\n[3] Archive version")
+row = conn.execute("SELECT version FROM ArchiveVersion LIMIT 1").fetchone()
+if row and row[0] == 4:
+    ok(f"Archive version is {row[0]}")
+elif row:
+    warn(f"Archive version is {row[0]} (expected 4)")
+else:
+    err("ArchiveVersion table is empty")
+
+# ── 4. Required archive files ───────────────────────────────
+print("\n[4] Required archive files")
+filepaths = [r[0] for r in conn.execute("SELECT filepath FROM Files").fetchall()]
+for req in ("bbf2.xml", "project_settings.json", "media_registry.xml"):
+    if req in filepaths:
+        ok(f"'{req}' present in archive")
+    else:
+        err(f"'{req}' missing from archive")
+
+# ── 5. bbf2.xml parse and structure ─────────────────────────
+print("\n[5] bbf2.xml structure")
+import xml.etree.ElementTree as ET
+bbf2_blob = conn.execute("SELECT filecontent FROM Files WHERE filepath='bbf2.xml'").fetchone()
+if not bbf2_blob:
+    err("Cannot read bbf2.xml content")
+    sys.exit(1)
+
+bbf2_text = bbf2_blob[0] if isinstance(bbf2_blob[0], str) else bbf2_blob[0].decode("utf-8")
+try:
+    root = ET.fromstring(bbf2_text)
+    ok("bbf2.xml parses as valid XML")
+except ET.ParseError as e:
+    err(f"bbf2.xml is not valid XML: {e}")
+    sys.exit(1)
+
+# Root element
+if root.tag == "book":
+    ok("Root element is <book>")
+else:
+    err(f"Root element is <{root.tag}> (expected <book>)")
+
+# ── 6. Metadata ─────────────────────────────────────────────
+print("\n[6] Book metadata")
+info = root.find("info")
+if info is not None:
+    title_el = info.find("title")
+    author_el = info.find("author")
+    title = (title_el.text or "").strip() if title_el is not None else ""
+    author = (author_el.text or "").strip() if author_el is not None else ""
+    if title:
+        ok(f"Title: '{title}'")
+    else:
+        err("Title is empty or missing")
+    if author:
+        ok(f"Author: '{author}'")
+    else:
+        err("Author is empty or missing")
+else:
+    err("<info> section is missing")
+
+# ── 7. Protected elements ───────────────────────────────────
+print("\n[7] Protected structural elements")
+
+# Masterpage
+masterpage = root.find("masterpage")
+if masterpage is not None:
+    mp_pages = masterpage.findall("page")
+    if len(mp_pages) >= 2:
+        ok(f"<masterpage> has {len(mp_pages)} pages (inside covers)")
+    else:
+        err(f"<masterpage> has {len(mp_pages)} pages (expected >= 2)")
+else:
+    err("<masterpage> section is missing")
+
+# Covers
+required_covers = ["softcover", "imagewrap", "dustjacket", "ebook"]
+found_covers = [c.get("type") for c in root.findall("cover")]
+for ct in required_covers:
+    if ct in found_covers:
+        ok(f"<cover type=\"{ct}\"> present")
+    else:
+        err(f"<cover type=\"{ct}\"> is missing")
+
+# ── 8. Section and page numbering ───────────────────────────
+print("\n[8] Content section and page numbering")
+section = root.find('.//section[@name=""]')
+if section is None:
+    section = root.find("section")
+if section is not None:
+    ok("<section> present")
+    pages = section.findall("page")
+    if len(pages) > 0:
+        ok(f"{len(pages)} content pages found")
+    else:
+        warn("Section has 0 content pages")
+
+    # Check sequential numbering
+    page_nums = []
+    for p in pages:
+        n = p.get("number")
+        if n is not None:
+            try:
+                page_nums.append(int(n))
+            except ValueError:
+                err(f"Non-integer page number: '{n}'")
+    if page_nums:
+        expected = list(range(1, len(page_nums) + 1))
+        if page_nums == expected:
+            ok(f"Pages numbered sequentially 1–{len(page_nums)}")
+        else:
+            # Check for gaps or duplicates
+            dupes = [n for n in page_nums if page_nums.count(n) > 1]
+            if dupes:
+                err(f"Duplicate page numbers: {sorted(set(dupes))}")
+            if page_nums != sorted(page_nums):
+                err("Pages are not in ascending order")
+            if sorted(page_nums) != expected:
+                warn(f"Page numbers are not sequential 1–N (found {page_nums[0]}–{page_nums[-1]}, {len(page_nums)} pages)")
+else:
+    err("<section> is missing")
+
+# ── 9. Image references ─────────────────────────────────────
+print("\n[9] Image reference integrity")
+image_elements = root.findall('.//section//container[@type="image"]/image')
+archive_images = set(f for f in filepaths if f.startswith("images/"))
+src_issues = 0
+autolayout_issues = 0
+missing_from_archive = []
+referenced_srcs = set()
+
+for img in image_elements:
+    src = img.get("src", "")
+    if not src:
+        continue
+    referenced_srcs.add(src)
+
+    # src must be filename only (not a path)
+    if "/" in src:
+        if src_issues < 5:
+            err(f"Image src contains path: '{src}' (must be filename only)")
+        src_issues += 1
+    else:
+        # Check image exists in archive
+        archive_path = f"images/{src}"
+        if archive_path not in archive_images:
+            missing_from_archive.append(src)
+
+    # autolayout must be 'fill'
+    al = img.get("autolayout", "")
+    if al != "fill":
+        if autolayout_issues < 5:
+            warn(f"Image '{src}' has autolayout='{al}' (should be 'fill')")
+        autolayout_issues += 1
+
+if src_issues > 5:
+    print(f"  ... and {src_issues - 5} more src path issues")
+if autolayout_issues > 5:
+    print(f"  ... and {autolayout_issues - 5} more autolayout issues")
+if missing_from_archive:
+    for m in missing_from_archive[:5]:
+        err(f"Image referenced but not in archive: '{m}'")
+    if len(missing_from_archive) > 5:
+        print(f"  ... and {len(missing_from_archive) - 5} more missing images")
+if not src_issues and not missing_from_archive:
+    ok(f"{len(referenced_srcs)} image references all valid")
+if not autolayout_issues and referenced_srcs:
+    ok("All images have autolayout='fill'")
+
+# ── 10. Media registry ──────────────────────────────────────
+print("\n[10] Media registry")
+mr_blob = conn.execute("SELECT filecontent FROM Files WHERE filepath='media_registry.xml'").fetchone()
+if mr_blob:
+    mr_text = mr_blob[0] if isinstance(mr_blob[0], str) else mr_blob[0].decode("utf-8")
+    try:
+        mr_root = ET.fromstring(mr_text)
+        media_entries = mr_root.findall(".//media")
+        registry_guids = set()
+        for m in media_entries:
+            g = m.get("guid", "")
+            if g:
+                registry_guids.add(g)
+        ok(f"{len(media_entries)} media entries in registry")
+
+        # Cross-check: images in pages should have media registry entries
+        page_guids = set()
+        for img in image_elements:
+            g = img.get("guid", "")
+            if g:
+                page_guids.add(g)
+
+        missing_registry = page_guids - registry_guids
+        if missing_registry:
+            for m in list(missing_registry)[:5]:
+                err(f"Image guid '{m}' used in pages but missing from media registry")
+            if len(missing_registry) > 5:
+                print(f"  ... and {len(missing_registry) - 5} more missing entries")
+        else:
+            ok("All page image GUIDs have media registry entries")
+    except ET.ParseError as e:
+        err(f"media_registry.xml is not valid XML: {e}")
+else:
+    err("media_registry.xml content is empty or unreadable")
+
+# ── 11. Filesize consistency ─────────────────────────────────
+print("\n[11] Archive file sizes")
+size_mismatches = 0
+for row in conn.execute("SELECT filepath, filesize, length(filecontent) FROM Files"):
+    fpath, declared, actual = row
+    if declared is not None and declared != -1 and declared != actual:
+        if size_mismatches < 3:
+            warn(f"'{fpath}': declared size {declared} != actual {actual}")
+        size_mismatches += 1
+if size_mismatches > 3:
+    print(f"  ... and {size_mismatches - 3} more size mismatches")
+if size_mismatches == 0:
+    ok("All file sizes are consistent")
+
+# ── 12. Forbidden file types in archive ──────────────────────
+print("\n[12] Forbidden file types")
+forbidden_exts = {".mp4", ".mov", ".avi", ".m4v", ".mkv", ".webm", ".flv", ".wmv",
+                  ".mpeg", ".mpg", ".raw", ".cr2", ".nef", ".arw", ".dng", ".orf",
+                  ".rw2", ".pef", ".raf", ".crw", ".sr2", ".gif", ".heic"}
+found_forbidden = []
+for fp in filepaths:
+    ext = os.path.splitext(fp)[1].lower()
+    if ext in forbidden_exts:
+        found_forbidden.append(fp)
+if found_forbidden:
+    for ff in found_forbidden[:5]:
+        err(f"Forbidden file in archive: '{ff}'")
+    if len(found_forbidden) > 5:
+        print(f"  ... and {len(found_forbidden) - 5} more forbidden files")
+else:
+    ok("No forbidden file types in archive")
+
+# ── 13. Spine text matches title ─────────────────────────────
+print("\n[13] Spine text consistency")
+if title:
+    spine_covers = ["softcover", "imagewrap", "dustjacket"]
+    for cover in root.findall("cover"):
+        ct = cover.get("type", "")
+        if ct not in spine_covers:
+            continue
+        spine = cover.find("spine")
+        if spine is None:
+            continue
+        for cont in spine.findall('.//container[@role="spineText"]'):
+            text_el = cont.find("text")
+            if text_el is not None and text_el.text:
+                spine_text = text_el.text.strip()
+                # Strip HTML/CDATA wrapping to get raw text
+                import re
+                raw = re.sub(r'<[^>]+>', '', spine_text).strip()
+                if title.lower() in raw.lower():
+                    ok(f"{ct} spine contains title")
+                elif raw:
+                    warn(f"{ct} spine text '{raw[:40]}...' may not match title '{title}'")
+
+# ── Summary ─────────────────────────────────────────────────
+conn.close()
+print(f"\n{'='*60}")
+print(f"RESULTS: {len(errors)} errors, {len(warnings)} warnings")
+if errors:
+    print("INTEGRITY CHECK FAILED — fix errors before delivering file")
+else:
+    print("INTEGRITY CHECK PASSED")
+print(f"{'='*60}\n")
+
+sys.exit(1 if errors else 0)
+INTEGRITY_CHECK
+```
+
+### When to Run
+
+- After creating a new .blurb file from a template
+- After adding images (bulk or batch)
+- After setting title and author
+- After any modification to bbf2.xml, media_registry.xml, or archive contents
+- **Always the LAST step before reporting success to the user**
+
+### What It Checks
+
+| # | Check | Severity |
+|---|-------|----------|
+| 1 | SQLite database is valid (not corrupt) | Error |
+| 2 | Required tables exist (Files, ArchiveVersion) | Error |
+| 3 | Archive version is 4 | Warning |
+| 4 | Required files present (bbf2.xml, project_settings.json, media_registry.xml) | Error |
+| 5 | bbf2.xml parses as valid XML with `<book>` root | Error |
+| 6 | Title and author are non-empty | Error |
+| 7 | Protected elements present (masterpage, all 4 cover types) | Error |
+| 8 | Content pages numbered sequentially without gaps or duplicates | Error/Warning |
+| 9 | Image `src` attributes are filename-only; images exist in archive; `autolayout="fill"` set | Error/Warning |
+| 10 | Media registry entries exist for all image GUIDs used in pages | Error |
+| 11 | Declared file sizes match actual blob sizes | Warning |
+| 12 | No forbidden file types in archive (video, RAW, GIF, HEIC) | Error |
+| 13 | Spine text contains the book title on all spine-bearing cover types | Warning |
+
+### Handling Failures
+
+- **Errors**: Must be fixed before the file is delivered. Go back and correct the issue, then re-run the integrity check.
+- **Warnings**: Report to the user but do not block delivery. These indicate potential issues that may or may not matter.
+- **If the check passes**: Report "Integrity check passed" along with the summary line.
+
+### Example Output
+
+```
+============================================================
+BLURB INTEGRITY CHECK: My Album 2026-03-09 14:30.blurb
+============================================================
+
+[1] SQLite database validity
+  OK:   SQLite database is valid
+
+[2] Required tables
+  OK:   Table 'Files' exists
+  OK:   Table 'ArchiveVersion' exists
+
+[3] Archive version
+  OK:   Archive version is 4
+
+[4] Required archive files
+  OK:   'bbf2.xml' present in archive
+  OK:   'project_settings.json' present in archive
+  OK:   'media_registry.xml' present in archive
+
+[5] bbf2.xml structure
+  OK:   bbf2.xml parses as valid XML
+  OK:   Root element is <book>
+
+[6] Book metadata
+  OK:   Title: 'My Album'
+  OK:   Author: 'John Wilson'
+
+[7] Protected structural elements
+  OK:   <masterpage> has 2 pages (inside covers)
+  OK:   <cover type="softcover"> present
+  OK:   <cover type="imagewrap"> present
+  OK:   <cover type="dustjacket"> present
+  OK:   <cover type="ebook"> present
+
+[8] Content section and page numbering
+  OK:   <section> present
+  OK:   42 content pages found
+  OK:   Pages numbered sequentially 1–42
+
+[9] Image reference integrity
+  OK:   38 image references all valid
+  OK:   All images have autolayout='fill'
+
+[10] Media registry
+  OK:   38 media entries in registry
+  OK:   All page image GUIDs have media registry entries
+
+[11] Archive file sizes
+  OK:   All file sizes are consistent
+
+[12] Forbidden file types
+  OK:   No forbidden file types in archive
+
+[13] Spine text consistency
+  OK:   softcover spine contains title
+  OK:   imagewrap spine contains title
+  OK:   dustjacket spine contains title
+
+============================================================
+RESULTS: 0 errors, 0 warnings
+INTEGRITY CHECK PASSED
+============================================================
+```
 
 ## Notes
 
