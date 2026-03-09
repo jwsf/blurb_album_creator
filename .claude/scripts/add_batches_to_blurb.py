@@ -8,9 +8,9 @@ to appropriately oriented containers.
 """
 
 import os
+import re
 import sys
 import json
-import re
 import xml.etree.ElementTree as ET
 import subprocess
 import random
@@ -127,6 +127,85 @@ def assign_images_to_containers(batch_image_data, page, page_profile):
     return list(zip(containers, [a for a in assignments if a is not None]))
 
 
+def replace_template_text_with_lorem(xml_path, max_existing_page):
+    """Replace visible text in template pages with 'Lorem ipsum'.
+
+    Uses string-based regex on the raw XML to avoid ElementTree re-serialization
+    issues that can corrupt the file for Bookwright.
+
+    Only affects text containers on template pages (page number <= max_existing_page).
+
+    The XML uses HTML-escaped text inside <text> elements, e.g.:
+      <text ...>&lt;p class="..."&gt;&lt;span ...&gt;Caption text&lt;/span&gt;&lt;/p&gt;</text>
+    The page elements have number= anywhere in the attributes:
+      <page ... number="N" ...>...</page>
+    """
+    with open(xml_path, 'r', encoding='utf-8') as f:
+        xml_text = f.read()
+
+    replaced_count = 0
+
+    def process_page_match(match):
+        nonlocal replaced_count
+        page_xml = match.group(0)
+        # Extract page number (could be anywhere in attributes)
+        page_num_match = re.search(r'\bnumber="(\d+)"', page_xml)
+        if not page_num_match:
+            return page_xml
+
+        page_num = int(page_num_match.group(1))
+        if page_num > max_existing_page:
+            return page_xml  # Don't touch new pages
+
+        # Replace text content in <text ...>CONTENT</text> elements.
+        # The content is HTML-escaped, e.g.:
+        #   &lt;span style="..."&gt;Andy Goldsworthy's 'Wood Line'&lt;/span&gt;
+        # We want to replace the visible text between &gt; and &lt; tags.
+        original = page_xml
+
+        def replace_text_element(text_match):
+            text_content = text_match.group(1)
+            # Replace visible text between &gt; and &lt; (HTML-escaped > and <)
+            new_content = re.sub(
+                r'(&gt;)([^&]+?)(&lt;)',
+                lambda m: m.group(1) + 'Lorem ipsum' + m.group(3)
+                    if m.group(2).strip() else m.group(0),
+                text_content
+            )
+            return text_match.group(0).replace(text_content, new_content)
+
+        # Match <text ...>CONTENT</text> within text-type containers
+        page_xml = re.sub(
+            r'(<text\b[^>]*>)(.*?)(</text>)',
+            lambda m: m.group(1) + re.sub(
+                r'(&gt;)([^&]+?)(&lt;)',
+                lambda tm: tm.group(1) + 'Lorem ipsum' + tm.group(3)
+                    if tm.group(2).strip() else tm.group(0),
+                m.group(2)
+            ) + m.group(3),
+            page_xml,
+            flags=re.DOTALL
+        )
+
+        if page_xml != original:
+            replaced_count += 1
+        return page_xml
+
+    # Match page blocks: <page ...number="N"...>...</page>
+    # The number attribute can appear anywhere in the tag
+    xml_text = re.sub(
+        r'<page\b[^>]*\bnumber="\d+"[^>]*>.*?</page>',
+        process_page_match,
+        xml_text,
+        flags=re.DOTALL
+    )
+
+    with open(xml_path, 'w', encoding='utf-8') as f:
+        f.write(xml_text)
+
+    print(f"  Replaced text with 'Lorem ipsum' on {replaced_count} template pages")
+
+
 def analyze_template(blurb_file):
     """Analyze template pages, group by container count, and extract orientation profiles."""
     subprocess.run(
@@ -181,103 +260,6 @@ def find_best_template_size(needed, available_sizes):
             return s
     # Fall back to largest available
     return max(available_sizes)
-
-
-def replace_text_with_lorem(html):
-    """Replace visible text nodes in HTML/CDATA content with 'Lorem ipsum'.
-
-    Matches non-empty text between > and < tags, preserving all HTML structure,
-    attributes, and whitespace-only nodes.
-    """
-    return re.sub(
-        r'(>)([^<]+)(<)',
-        lambda m: m.group(1) + 'Lorem ipsum' + m.group(3)
-        if m.group(2).strip() else m.group(0),
-        html
-    )
-
-
-def clean_template_pages(section, max_existing):
-    """Remove original template body pages and replace text in new pages.
-
-    1. Delete all template pages (1 <= page_number <= max_existing)
-    2. Replace text content in new pages with 'Lorem ipsum'
-    3. Print summary
-    """
-    # --- 1. Delete original template body pages ---
-    pages_deleted = 0
-    pages_to_remove = []
-    for page in section.findall('page'):
-        pn = page.get('number')
-        if not pn or not pn.lstrip('-').isdigit():
-            continue
-        pn_int = int(pn)
-        if 1 <= pn_int <= max_existing:
-            pages_to_remove.append(page)
-
-    for page in pages_to_remove:
-        section.remove(page)
-        pages_deleted += 1
-
-    # --- 2. Strip spread attribute and renumber pages sequentially from 1 ---
-    # New pages inherit spread="true" from cloned template pages, which causes
-    # Bookwright to display them as two-page spreads with duplicate page numbers.
-    # Remove the attribute so each page occupies a single slot.
-    spreads_removed = 0
-    page_num = 1
-    for page in section.findall('page'):
-        pn = page.get('number')
-        if not pn or not pn.lstrip('-').isdigit():
-            continue
-        pn_int = int(pn)
-        if pn_int < 0:
-            continue  # masterpage; skip
-        if 'spread' in page.attrib:
-            del page.attrib['spread']
-            spreads_removed += 1
-        page.set('number', str(page_num))
-        page_num += 1
-
-    # --- 3. Replace text in new pages with "Lorem ipsum" ---
-    text_pages_replaced = 0
-    for page in section.findall('page'):
-        pn = page.get('number')
-        if not pn or not pn.lstrip('-').isdigit():
-            continue
-        pn_int = int(pn)
-        if pn_int < 1:
-            continue  # masterpage; skip
-
-        text_containers = page.findall('.//container[@type="text"]')
-        if not text_containers:
-            continue
-
-        replaced_any = False
-        for container in text_containers:
-            # Text is stored in the container's text or tail, or in child elements
-            # Walk all text content in the container
-            for elem in container.iter():
-                if elem.text and elem.text.strip():
-                    original = elem.text
-                    elem.text = replace_text_with_lorem(original)
-                    if elem.text != original:
-                        replaced_any = True
-                if elem.tail and elem.tail.strip():
-                    original = elem.tail
-                    elem.tail = replace_text_with_lorem(original)
-                    if elem.tail != original:
-                        replaced_any = True
-
-        if replaced_any:
-            text_pages_replaced += 1
-
-    # --- 4. Summary ---
-    total_pages = page_num - 1
-    print()
-    print(f"Template cleanup: deleted {pages_deleted} original template pages, "
-          f"renumbered {total_pages} pages (1-{total_pages}), "
-          f"removed {spreads_removed} spread attributes, "
-          f"replaced text in {text_pages_replaced} new pages")
 
 
 def process_all_batches(blurb_file):
@@ -461,15 +443,17 @@ def process_all_batches(blurb_file):
     for new_page in new_pages:
         section.append(new_page)
 
-    # Clean up: remove original template pages and replace text in new pages
-    clean_template_pages(section, max_existing)
-
     # Verify pages were added
     final_count = len(section.findall('page'))
-    print(f"Pages in section after cleanup: {final_count}")
+    print(f"Pages in section after append: {final_count}")
 
     # Save updated XML
     tree.write('/tmp/bbf2_updated.xml', encoding='utf-8', xml_declaration=True)
+
+    # Replace text on template pages with 'Lorem ipsum' (string-based, not ElementTree)
+    print("\nReplacing template page text with 'Lorem ipsum'...")
+    replace_template_text_with_lorem('/tmp/bbf2_updated.xml', max_existing)
+
     filesize = os.path.getsize('/tmp/bbf2_updated.xml')
     print(f"Updated XML size: {filesize:,} bytes")
 
@@ -587,26 +571,17 @@ def process_all_batches(blurb_file):
     verify_tree = ET.parse('/tmp/bbf2_final_check.xml')
     verify_section = verify_tree.getroot().find('.//section[@name=""]')
 
+    template_ref_count = 0
     xml_ref_count = 0
     for page in verify_section.findall('page'):
-        pn = page.get('number')
-        if not pn or int(pn) < 1:
-            continue
+        pn = int(page.get('number'))
         for c in page.findall('.//container[@type="image"]'):
             img = c.find('image')
             if img is not None and img.get('src'):
-                xml_ref_count += 1
-
-    # Verify sequential page numbering (1, 2, 3, ..., N)
-    page_nums = sorted(int(p.get('number')) for p in verify_section.findall('page')
-                       if p.get('number', '').lstrip('-').isdigit() and int(p.get('number')) > 0)
-    expected_nums = list(range(1, len(page_nums) + 1))
-    if page_nums != expected_nums:
-        print(f"\n⚠️  ERROR: Page numbering not sequential!")
-        print(f"   Expected: 1-{len(page_nums)}")
-        print(f"   Got: {page_nums[:5]}...{page_nums[-5:]}")
-    else:
-        print(f"{len(page_nums)} pages numbered 1-{len(page_nums)} (sequential, no spreads)")
+                if pn <= max_existing:
+                    template_ref_count += 1
+                else:
+                    xml_ref_count += 1
 
     # Count media registry entries
     subprocess.run(['sqlite3', blurb_file,
@@ -617,30 +592,32 @@ def process_all_batches(blurb_file):
     media_count = len(mr_images.findall('media')) if mr_images is not None else 0
 
     expected = sum(len(b['images']) for b in state['batches'])
+    new_archive_count = total_archive_count - template_ref_count
 
     print(f"Expected (source images): {expected}")
     print(f"Images processed: {images_added}")
-    print(f"XML image refs: {xml_ref_count}")
-    print(f"Archive image files: {total_archive_count}")
+    print(f"XML refs in new pages: {xml_ref_count}")
+    print(f"Archive files (new only): {new_archive_count}")
+    print(f"Archive files (total): {total_archive_count} (includes {template_ref_count} from template)")
     print(f"Media registry entries: {media_count}")
 
     if images_added != expected:
         print(f"\n⚠️  WARNING: {expected - images_added} images failed to add")
 
-    if total_archive_count != images_added:
-        print(f"\n⚠️  ERROR: Archive count mismatch (expected {images_added}, got {total_archive_count})")
+    if new_archive_count != images_added:
+        print(f"\n⚠️  ERROR: New archive count mismatch (expected {images_added}, got {new_archive_count})")
 
     if xml_ref_count != images_added:
         print(f"\n⚠️  ERROR: XML reference mismatch (expected {images_added}, got {xml_ref_count})")
 
-    if total_archive_count == images_added == xml_ref_count == expected:
+    if new_archive_count == images_added == xml_ref_count == expected:
         print(f"\n✓ All counts match: {images_added} images added successfully")
-        print(f"✓ Archive: {total_archive_count} images")
-        print(f"✓ XML: {xml_ref_count} references")
-        print(f"✓ Media registry: {media_count} entries")
+        print(f"✓ Input: {expected} images")
+        print(f"✓ Archive: {new_archive_count} new + {template_ref_count} template = {total_archive_count} total")
+        print(f"✓ XML: {xml_ref_count} new references")
 
     print("=" * 60)
-    print(f"{pages_created} pages created (1-{pages_created})")
+    print(f"Pages {max_existing + 1} - {max_existing + pages_created} appended to book")
     print("=" * 60)
 
     # Cleanup verification files
