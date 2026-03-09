@@ -282,11 +282,12 @@ def fill_page_xml(page_xml, page_num, image_assignments):
 
     # Replace visible text with 'Lorem ipsum' in all text containers
     # Text is inside CDATA: <![CDATA[<p ...><span ...>Visible text</span></p>]]>
+    # CRITICAL: Must not replace ]]> (CDATA closing) which the regex can match
     def replace_text_in_cdata(m):
         text_elem = m.group(0)
-        # Replace visible text between > and < inside CDATA
         def replace_visible(tm):
-            if tm.group(2).strip():
+            text = tm.group(2)
+            if text.strip() and text.strip() != ']]>':
                 return tm.group(1) + 'Lorem ipsum' + tm.group(3)
             return tm.group(0)
         text_elem = re.sub(r'(>)([^<]+)(<)', replace_visible, text_elem)
@@ -296,7 +297,8 @@ def fill_page_xml(page_xml, page_num, image_assignments):
     def replace_text_in_escaped(m):
         text_elem = m.group(0)
         def replace_visible(tm):
-            if tm.group(2).strip():
+            text = tm.group(2)
+            if text.strip() and text.strip() != ']]>':
                 return tm.group(1) + 'Lorem ipsum' + tm.group(3)
             return tm.group(0)
         text_elem = re.sub(r'(&gt;)([^&]+?)(&lt;)', replace_visible, text_elem)
@@ -330,10 +332,12 @@ def replace_text_on_template_pages(raw_xml, max_existing_page):
         original = page_xml
 
         # Handle CDATA format: >Visible text< inside CDATA blocks
+        # CRITICAL: Must not replace ]]> (CDATA closing) which the regex can match
         def replace_cdata_text(text_match):
             text_content = text_match.group(0)
             def replace_visible(tm):
-                if tm.group(2).strip():
+                text = tm.group(2)
+                if text.strip() and text.strip() != ']]>':
                     return tm.group(1) + 'Lorem ipsum' + tm.group(3)
                 return tm.group(0)
             return re.sub(r'(>)([^<]+)(<)', replace_visible, text_content)
@@ -342,7 +346,8 @@ def replace_text_on_template_pages(raw_xml, max_existing_page):
         def replace_escaped_text(text_match):
             text_content = text_match.group(0)
             def replace_visible(tm):
-                if tm.group(2).strip():
+                text = tm.group(2)
+                if text.strip() and text.strip() != ']]>':
                     return tm.group(1) + 'Lorem ipsum' + tm.group(3)
                 return tm.group(0)
             return re.sub(r'(&gt;)([^&]+?)(&lt;)', replace_visible, text_content)
@@ -666,18 +671,20 @@ def process_all_batches(blurb_file):
     print(f"  Template image refs: {template_ref_count}")
     print(f"Media registry entries: {media_count}")
 
+    total_xml_refs = xml_ref_count + template_ref_count
+
     all_ok = True
     if images_added != expected:
         print(f"\n  WARNING: {expected - images_added} images failed to add")
         all_ok = False
 
-    if xml_ref_count != images_added:
-        print(f"\n  ERROR: XML reference mismatch (expected {images_added}, got {xml_ref_count})")
+    if total_xml_refs != total_archive_count:
+        print(f"\n  ERROR: XML total refs ({total_xml_refs}) != archive count ({total_archive_count})")
         all_ok = False
 
     if all_ok:
         print(f"\n  All counts match: {images_added} images added successfully")
-        print(f"  XML: {xml_ref_count} refs in new pages + {template_ref_count} template refs")
+        print(f"  XML: {xml_ref_count} in new pages + {template_ref_count} in template = {total_xml_refs} total")
 
     print("=" * 60)
     print(f"Pages {max_existing + 1} - {max_existing + pages_created} appended to book")
