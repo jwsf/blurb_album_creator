@@ -227,6 +227,28 @@ def main():
     for np in reversed(new_pages):
         section.insert(0, np)
 
+    # Delete original template pages (only from <section>, not covers/masterpages)
+    # Only delete even numbers of pages to maintain spread alignment
+    all_section_pages = section.findall('page')
+    old_template_pages = all_section_pages[len(new_pages):]
+    delete_count = len(old_template_pages)
+    if delete_count % 2 != 0:
+        delete_count -= 1
+
+    deleted = 0
+    if delete_count > 0:
+        print(f"Removing {delete_count} original template pages...")
+        for page in old_template_pages[:delete_count]:
+            section.remove(page)
+            deleted += 1
+        kept = len(old_template_pages) - delete_count
+        if kept > 0:
+            print(f"  Kept {kept} template page(s) to maintain even page count")
+
+    # Renumber all remaining pages sequentially
+    for idx, page in enumerate(section.findall('page'), start=1):
+        page.set('number', str(idx))
+
     tree.write('/tmp/bbf2_updated.xml', encoding='utf-8', xml_declaration=True)
     filesize = os.path.getsize('/tmp/bbf2_updated.xml')
     subprocess.run(['sqlite3', blurb_file,
@@ -242,6 +264,8 @@ def main():
     print(f"COMPLETE")
     print(f"{'='*60}")
     print(f"Added {len(all_image_data)} images in {len(new_pages)} pages")
+    if deleted > 0:
+        print(f"Removed {deleted} original template pages")
 
     size_counts = defaultdict(int)
     for b in expanded_batches:

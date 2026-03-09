@@ -237,7 +237,8 @@ When this skill is invoked, support the following operations based on user inten
 - Delete or modify the `<masterpage>` section
 - Delete or modify any `<cover>` sections (softcover, imagewrap, dustjacket, ebook)
 - Remove spine elements
-- Delete all template pages from the `<section>`
+
+**Note:** Template pages in `<section>` are automatically deleted after bulk image insertion (5c). This is the only supported page deletion path — it removes an even number of pages and renumbers the rest.
 
 **Response template when refusing:**
 ```
@@ -584,7 +585,8 @@ rm /tmp/media_registry.xml /tmp/media_registry.xml.bak 2>/dev/null
 
 ### 5a. Add New Page to Book
 **IMPORTANT**:
-- Always ADD pages to existing content, never remove template pages (removing causes invalid files)
+- Always ADD pages to existing content
+- Template pages in `<section>` are automatically cleaned up after bulk image insertion (5c) — do not manually delete them
 - Only add pages within the `<section>` area - NEVER modify `<masterpage>` or `<cover>` sections
 - Do NOT delete or alter cover pages (front, back, inside, outside covers)
 
@@ -1063,6 +1065,26 @@ def create_pages_for_batches(blurb_file, all_batch_data, pages_by_count):
     for new_page in reversed(new_pages):
         section.insert(0, new_page)
 
+    # Delete original template pages (only from <section>, not covers/masterpages)
+    # Only delete even numbers of pages to maintain spread alignment
+    all_section_pages = section.findall('page')
+    old_template_pages = all_section_pages[len(new_pages):]
+    delete_count = len(old_template_pages)
+    if delete_count % 2 != 0:
+        delete_count -= 1
+
+    if delete_count > 0:
+        print(f"Removing {delete_count} original template pages...")
+        for page in old_template_pages[:delete_count]:
+            section.remove(page)
+        kept = len(old_template_pages) - delete_count
+        if kept > 0:
+            print(f"  Kept {kept} template page(s) to maintain even page count")
+
+    # Renumber all remaining pages sequentially
+    for idx, page in enumerate(section.findall('page'), start=1):
+        page.set('number', str(idx))
+
     # Save
     tree.write('/tmp/bbf2_updated.xml', encoding='utf-8', xml_declaration=True)
     filesize = os.path.getsize('/tmp/bbf2_updated.xml')
@@ -1102,9 +1124,13 @@ if __name__ == '__main__':
    - Extracts `XMP:Description` from image metadata
    - Places in adjacent `<container type="text">` elements as formatted HTML
 
-5. **Page Insertion**:
+5. **Page Insertion and Template Cleanup**:
    - Inserts new pages at position 0 in `<section>`
    - Renumbers all existing pages (shifts by number of new pages)
+   - **Deletes original template pages** after insertion (only from `<section>`, never covers/masterpages)
+   - Only deletes an even number of template pages to maintain spread alignment
+   - If odd number of template pages, keeps 1 to stay even
+   - Renumbers all remaining pages sequentially (1, 2, 3, ...)
 
 6. **Benefits Over Old Method**:
    - ✅ More efficient: Creates fewer pages by grouping images
@@ -1357,8 +1383,30 @@ print("Inserting new pages at beginning...")
 for idx, new_page in enumerate(reversed(new_pages)):
     section.insert(0, new_page)
 
+# Delete original template pages (only from <section>, not covers/masterpages)
+# Only delete even numbers of pages to maintain spread alignment
+all_section_pages = section.findall('page')
+old_template_pages = all_section_pages[len(new_pages):]
+delete_count = len(old_template_pages)
+if delete_count % 2 != 0:
+    delete_count -= 1
+
+if delete_count > 0:
+    print(f"Removing {delete_count} original template pages...")
+    for page in old_template_pages[:delete_count]:
+        section.remove(page)
+    kept = len(old_template_pages) - delete_count
+    if kept > 0:
+        print(f"  Kept {kept} template page(s) to maintain even page count")
+
+# Renumber all remaining pages sequentially
+for idx, page in enumerate(section.findall('page'), start=1):
+    page.set('number', str(idx))
+
 print(f"Pages 1-{len(new_pages)}: New images with random layouts")
-print(f"Pages {len(new_pages)+1}+: Original template pages (renumbered)")
+remaining_template = len(section.findall('page')) - len(new_pages)
+if remaining_template > 0:
+    print(f"Pages {len(new_pages)+1}+: {remaining_template} remaining template page(s)")
 
 # Write back
 tree.write('/tmp/bbf2_updated.xml', encoding='utf-8', xml_declaration=True)
@@ -1951,10 +1999,11 @@ rm /tmp/bbf2_temp.xml /tmp/bbf2_temp.xml.bak
 ```
 
 **IMPORTANT**:
-- Keep ALL template content intact (pages, images, settings)
-- Add new pages at the end using the method in section 5a
-- Do NOT delete template pages, images, or content - this creates invalid files
-- The template contains working examples that ensure file validity
+- Keep ALL template content intact initially (pages, images, settings)
+- Add new pages using the methods in sections 5a-5e
+- Template pages in `<section>` are automatically cleaned up after bulk image insertion (5c) — this deletes an even number of original template pages and renumbers the rest
+- Do NOT manually delete template pages outside of the automated cleanup
+- Never delete `<masterpage>` or `<cover>` sections — these are structural requirements
 
 **Default output location**: `outputs/` directory (create if it doesn't exist)
 **Never create from scratch** - always use a template to ensure proper structure and compatibility.
@@ -1976,7 +2025,14 @@ sqlite3 "path/to/file.blurb" "DELETE FROM Files WHERE filepath='<internal/path>'
 ```
 
 **Deleting Pages from bbf2.xml:**
-**NEVER delete pages by removing them from bbf2.xml**. This creates invalid files. If you must remove content:
+
+**Exception — Template page cleanup after image insertion:**
+After inserting new image pages via bulk addition (5c), original template pages in `<section>` are automatically deleted. This is safe because:
+- Only `<section>` content pages are removed (never `<masterpage>` or `<cover>`)
+- Only an even number of pages are deleted (to maintain spread alignment)
+- Pages are renumbered sequentially after deletion
+
+**For all other cases**, do not delete pages by removing them from bbf2.xml. If you must remove content:
 - Keep the `<page>` structure intact
 - Remove only the `<container>` elements inside the page
 - **NEVER remove**: `<masterpage>` pages, `<cover>` sections, or their sub-elements
