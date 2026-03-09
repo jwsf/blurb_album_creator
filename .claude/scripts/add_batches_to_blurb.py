@@ -138,9 +138,15 @@ def analyze_template(blurb_file):
     page_profiles = {}
     page_numbers = {}  # id(page) -> page number string
 
+    spread_count = 0
     for page in section.findall('page'):
         pn = page.get('number')
         if not pn:
+            continue
+        # Skip spread pages — they are double-wide (2x page width) and cause
+        # containers to appear off-screen when used as single-page templates
+        if page.get('spread') == 'true':
+            spread_count += 1
             continue
         containers = page.findall('.//container[@type="image"]')
         count = len(containers)
@@ -148,6 +154,9 @@ def analyze_template(blurb_file):
             pages_by_count[count].append(page)
             page_profiles[id(page)] = get_page_orientation_profile(page)
             page_numbers[id(page)] = pn
+
+    if spread_count:
+        print(f"  Skipped {spread_count} spread (double-wide) pages")
 
     # Determine max page number
     max_existing = 0
@@ -161,9 +170,21 @@ def analyze_template(blurb_file):
         raw_xml = f.read()
 
     # Extract raw XML strings for each template page (by page number)
+    # Uses two separate patterns to correctly handle self-closing pages (<page .../>)
+    # vs content pages (<page ...>...</page>). A single alternation fails because
+    # [^>]* greedily consumes the / in />, falling through to the >.*?</page> branch.
     raw_pages = {}  # page_number_str -> raw XML string
-    for m in re.finditer(r'(<page\b[^>]*\bnumber="(\d+)"[^>]*(?:/>|>.*?</page>))', raw_xml, re.DOTALL):
+    for m in re.finditer(r'(<page\b[^>]*\bnumber="(\d+)"[^>]*/>)', raw_xml):
         raw_pages[m.group(2)] = m.group(1)
+    for m in re.finditer(r'(<page\b[^>]*\bnumber="(\d+)"[^/>][^>]*>.*?</page>)', raw_xml, re.DOTALL):
+        raw_pages[m.group(2)] = m.group(1)
+
+    # Remove spread pages from raw_pages — they must not be used as templates
+    spread_keys = [k for k, v in raw_pages.items() if 'spread="true"' in v]
+    for k in spread_keys:
+        del raw_pages[k]
+
+    print(f"  Extracted {len(raw_pages)} raw page templates ({len(spread_keys)} spread pages excluded)")
 
     return dict(pages_by_count), page_profiles, page_numbers, max_existing, raw_xml, raw_pages
 
