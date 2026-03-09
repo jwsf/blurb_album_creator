@@ -563,13 +563,64 @@ def process_all_batches(blurb_file):
     # --- String-based XML assembly (preserves CDATA and original formatting) ---
     print(f"\nAssembling final XML ({pages_created} new pages)...")
 
-    # Replace text on template pages with 'Lorem ipsum'
-    print("Replacing template page text with 'Lorem ipsum'...")
-    raw_xml = replace_text_on_template_pages(raw_xml, max_existing)
+    # Delete original template pages from <section> (only even count, never covers/masterpages)
+    # Template pages have number="1" through number="max_existing"
+    print(f"Removing original template pages (1-{max_existing})...")
+    template_page_count = max_existing
+    delete_count = template_page_count
+    if delete_count % 2 != 0:
+        delete_count -= 1
+
+    deleted_pages = 0
+    if delete_count > 0:
+        # Remove template pages by matching their page number within <section>
+        # We need to find the <section> block and remove pages within it
+        # Process pages from highest to lowest to avoid renumbering issues
+        pages_to_delete = list(range(1, delete_count + 1))
+        for pn in pages_to_delete:
+            # Match both self-closing and content pages
+            # Self-closing: <page ... number="N" .../>
+            pattern_self_closing = rf'<page\b[^>]*\bnumber="{pn}"[^>]*/>\s*'
+            # Content page: <page ... number="N" ...>...</page>
+            pattern_content = rf'<page\b[^>]*\bnumber="{pn}"[^/>][^>]*>.*?</page>\s*'
+
+            new_xml = re.sub(pattern_content, '', raw_xml, count=1, flags=re.DOTALL)
+            if new_xml == raw_xml:
+                new_xml = re.sub(pattern_self_closing, '', raw_xml, count=1)
+            if new_xml != raw_xml:
+                raw_xml = new_xml
+                deleted_pages += 1
+
+        kept = template_page_count - deleted_pages
+        print(f"  Removed {deleted_pages} template pages")
+        if kept > 0:
+            print(f"  Kept {kept} template page(s) to maintain even page count")
+
+    # Replace text with 'Lorem ipsum' on any remaining template pages
+    remaining_template = template_page_count - deleted_pages
+    if remaining_template > 0:
+        print(f"Replacing text with 'Lorem ipsum' on {remaining_template} remaining template page(s)...")
+        raw_xml = replace_text_on_template_pages(raw_xml, max_existing)
 
     # Insert new pages before </section>
     new_pages_block = '\n'.join(new_page_xmls)
     raw_xml = raw_xml.replace('</section>', f'{new_pages_block}\n</section>')
+
+    # Renumber all remaining pages sequentially (1, 2, 3, ...)
+    print("Renumbering pages sequentially...")
+    page_counter = [0]  # use list for closure mutability
+    def renumber_page(m):
+        page_counter[0] += 1
+        return f'{m.group(1)}{page_counter[0]}{m.group(3)}'
+
+    # Only renumber pages inside <section>...</section>
+    section_match = re.search(r'(<section\b[^>]*>)(.*?)(</section>)', raw_xml, re.DOTALL)
+    if section_match:
+        section_content = section_match.group(2)
+        section_content = re.sub(r'(\bnumber=")(\d+)(")', renumber_page, section_content)
+        raw_xml = raw_xml[:section_match.start(2)] + section_content + raw_xml[section_match.end(2):]
+    total_pages = page_counter[0]
+    print(f"  Renumbered {total_pages} pages (1-{total_pages})")
 
     # Write the assembled XML
     with open('/tmp/bbf2_updated.xml', 'w', encoding='utf-8') as f:
@@ -582,7 +633,6 @@ def process_all_batches(blurb_file):
     with open('/tmp/bbf2_updated.xml', 'r', encoding='utf-8') as f:
         verify_xml = f.read()
     verify_count = len(re.findall(r'<page\b[^>]*\bnumber="\d+"', verify_xml))
-    expected_total = max_existing + pages_created
     print(f"Pages in final XML: {verify_count}")
 
     # Update archive with the string-assembled XML (preserves CDATA)
@@ -662,18 +712,12 @@ def process_all_batches(blurb_file):
     with open('/tmp/bbf2_final_check.xml', 'r', encoding='utf-8') as f:
         final_xml = f.read()
 
-    # String-based verification: count image refs in template vs new pages
-    template_ref_count = 0
+    # Count all image refs in section pages
     xml_ref_count = 0
     for page_match in re.finditer(r'<page\b[^>]*\bnumber="(\d+)"[^>]*>.*?</page>', final_xml, re.DOTALL):
-        pn = int(page_match.group(1))
         page_content = page_match.group(0)
-        # Count image elements with a non-empty src attribute
         img_refs = len(re.findall(r'<image\b[^>]*\bsrc="[^"]+', page_content))
-        if pn <= max_existing:
-            template_ref_count += img_refs
-        else:
-            xml_ref_count += img_refs
+        xml_ref_count += img_refs
 
     subprocess.run(['sqlite3', blurb_file,
                    "SELECT writefile('/tmp/media_registry_final.xml', filecontent) FROM Files WHERE filepath='media_registry.xml';"],
@@ -687,28 +731,25 @@ def process_all_batches(blurb_file):
 
     print(f"Expected (source images): {expected}")
     print(f"Images processed: {images_added}")
-    print(f"XML refs in new pages: {xml_ref_count}")
-    print(f"Archive image files (total): {total_archive_count}")
-    print(f"  Template image refs: {template_ref_count}")
+    print(f"Pages created: {pages_created}")
+    print(f"Template pages deleted: {deleted_pages}")
+    print(f"Final page count: {total_pages}")
+    print(f"XML image refs: {xml_ref_count}")
+    print(f"Archive image files: {total_archive_count}")
     print(f"Media registry entries: {media_count}")
-
-    total_xml_refs = xml_ref_count + template_ref_count
 
     all_ok = True
     if images_added != expected:
         print(f"\n  WARNING: {expected - images_added} images failed to add")
         all_ok = False
 
-    if total_xml_refs != total_archive_count:
-        print(f"\n  ERROR: XML total refs ({total_xml_refs}) != archive count ({total_archive_count})")
+    if xml_ref_count != images_added:
+        print(f"\n  WARNING: XML refs ({xml_ref_count}) != images added ({images_added})")
         all_ok = False
 
     if all_ok:
-        print(f"\n  All counts match: {images_added} images added successfully")
-        print(f"  XML: {xml_ref_count} in new pages + {template_ref_count} in template = {total_xml_refs} total")
+        print(f"\n  All counts match: {images_added} images in {pages_created} pages")
 
-    print("=" * 60)
-    print(f"Pages {max_existing + 1} - {max_existing + pages_created} appended to book")
     print("=" * 60)
 
     # Cleanup verification files
