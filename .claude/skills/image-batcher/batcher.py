@@ -324,9 +324,91 @@ class ImageBatcher:
         self.stats['metadata_extracted'] = len(metadata)
         print()
 
-        # Second pass: categorize folders as single-image or multi-image
-        multi_image_folders = []
-        single_image_data = []  # List of (folder, date_str, folder_name, image_path, metadata)
+        # Process all folders in chronological order.
+        # Single-image dates are buffered and flushed (combined) when a
+        # multi-image folder is encountered or at the end, so they appear
+        # in their correct chronological position instead of at the end.
+        pending_singles = []  # Buffer: [(folder, date_str, folder_name, image_path, img_metadata)]
+
+        def flush_pending_singles():
+            """Create batches from buffered consecutive single-image dates."""
+            nonlocal batch_number
+            if not pending_singles:
+                return
+
+            if self.combine_singles and len(pending_singles) > 1:
+                # Group by location, then create batches
+                loc_groups = defaultdict(list)
+                for s_folder, s_date, s_name, s_img, s_meta in pending_singles:
+                    location = s_meta.get('location', 'Unknown')
+                    loc_groups[location].append((s_folder, s_date, s_name, s_img, s_meta))
+
+                for location, group_data in loc_groups.items():
+                    group_images = [img for _, _, _, img, _ in group_data]
+                    single_batches = self.create_batches_from_images(group_images, metadata)
+
+                    for batch_images in single_batches:
+                        batch_dates = []
+                        batch_folders = []
+                        for img in batch_images:
+                            for s_folder, s_date, s_name, s_img, _ in group_data:
+                                if s_img == img:
+                                    if s_date not in batch_dates:
+                                        batch_dates.append(s_date)
+                                    if s_name not in batch_folders:
+                                        batch_folders.append(s_name)
+                                    break
+
+                        is_multi = len(batch_dates) > 1
+                        date_display = f"{batch_dates[0]} to {batch_dates[-1]}" if is_multi else batch_dates[0]
+                        folder_display = f"{len(batch_dates)} dates" if is_multi else batch_folders[0]
+
+                        batch_info = {
+                            "batch_number": batch_number,
+                            "date_folder": date_display,
+                            "folder_path": str(group_data[0][0].parent),
+                            "folder_name": folder_display,
+                            "images": batch_images,
+                            "image_count": len(batch_images),
+                            "is_multi_date": is_multi,
+                            "is_multi_location": False,
+                            "location": location if location != 'Unknown' else None,
+                            "date_list": batch_dates
+                        }
+                        all_batches.append(batch_info)
+                        self.stats['batches_created'] += 1
+                        if is_multi:
+                            self.stats['multi_date_batches'] += 1
+
+                        loc_info = f" at {location}" if location != 'Unknown' else ""
+                        if is_multi:
+                            print(f"  ↳ combined {len(batch_images)} single-image dates ({', '.join(batch_dates)}){loc_info}")
+                        else:
+                            print(f"  {batch_dates[0]}: 1 image{loc_info}")
+                        batch_number += 1
+            else:
+                # Don't combine, or only 1 single — each becomes its own batch
+                for s_folder, s_date, s_name, s_img, s_meta in pending_singles:
+                    location = s_meta.get('location')
+                    batch_info = {
+                        "batch_number": batch_number,
+                        "date_folder": s_date,
+                        "folder_path": str(s_folder),
+                        "folder_name": s_name,
+                        "images": [s_img],
+                        "image_count": 1,
+                        "is_multi_date": False,
+                        "is_multi_location": False,
+                        "location": location,
+                        "date_list": [s_date]
+                    }
+                    all_batches.append(batch_info)
+                    self.stats['batches_created'] += 1
+                    loc_info = f" at {location}" if location else ""
+                    print(f"  {s_name}: 1 image{loc_info}")
+                    batch_number += 1
+
+            pending_singles.clear()
 
         for folder in date_folders:
             folder_name = folder.name
@@ -339,148 +421,47 @@ class ImageBatcher:
                 continue
 
             if len(images) == 1:
-                # Single image - collect for potential cross-date batching
+                # Single image — buffer for combining with consecutive singles
                 img_metadata = metadata.get(images[0], {})
-                single_image_data.append((folder, date_str, folder_name, images[0], img_metadata))
+                pending_singles.append((folder, date_str, folder_name, images[0], img_metadata))
                 self.stats['single_image_folders'] += 1
             else:
-                # Multiple images - keep in date-specific batches
-                multi_image_folders.append((folder, date_str, folder_name, images))
+                # Multi-image folder — flush buffered singles first, then process
+                flush_pending_singles()
                 self.stats['multi_image_folders'] += 1
 
-        # Third pass: process multi-image folders (location-aware batches with metadata)
-        for folder, date_str, folder_name, images in multi_image_folders:
-            # Group images by location first
-            location_groups = self.group_images_by_location(images)
-
-            total_batches = 0
-            for location, location_images in location_groups:
-                # Create batches within each location group (with orientation awareness)
-                batches = self.create_batches_from_images(location_images, metadata)
-                total_batches += len(batches)
-
-                for batch_images in batches:
-                    batch_info = {
-                        "batch_number": batch_number,
-                        "date_folder": date_str,
-                        "folder_path": str(folder),
-                        "folder_name": folder_name,
-                        "images": batch_images,
-                        "image_count": len(batch_images),
-                        "is_multi_date": False,
-                        "location": location,
-                        "is_multi_location": False
-                    }
-                    all_batches.append(batch_info)
-                    batch_number += 1
-                    self.stats['batches_created'] += 1
-
-            # Print summary
-            if len(location_groups) > 1:
-                location_summary = ", ".join([f"{len(imgs)} at {loc or 'Unknown'}" for loc, imgs in location_groups])
-                print(f"  {folder_name}: {len(images)} images → {total_batches} batches ({len(location_groups)} locations: {location_summary})")
-                self.stats['multi_location_dates'] += 1
-            else:
-                location = location_groups[0][0] if location_groups else None
-                loc_str = f" at {location}" if location else ""
-                print(f"  {folder_name}: {len(images)} images → {total_batches} batches{loc_str}")
-
-        # Fourth pass: create batches from single-image dates
-        if single_image_data:
-            print()
-            if self.combine_singles:
-                print(f"Processing {len(single_image_data)} single-image dates (location-aware batching):")
-
-                # Group single-image dates by location
-                location_groups = defaultdict(list)
-                for folder, date_str, folder_name, img, img_metadata in single_image_data:
-                    location = img_metadata.get('location', 'Unknown')
-                    location_groups[location].append((folder, date_str, folder_name, img, img_metadata))
-
-                print(f"  Found {len(location_groups)} location groups")
-
-                # Create batches within each location group
-                for location, group_data in location_groups.items():
-                    group_images = [img for _, _, _, img, _ in group_data]
-
-                    # Create batches for this location group (with orientation awareness)
-                    single_batches = self.create_batches_from_images(group_images, metadata)
-
-                    for batch_images in single_batches:
-                        # Collect date info for all images in this batch
-                        batch_dates = []
-                        batch_folders = []
-
-                        for img in batch_images:
-                            # Find the date/folder info for this image
-                            for folder, date_str, folder_name, single_img, _ in group_data:
-                                if single_img == img:
-                                    if date_str not in batch_dates:
-                                        batch_dates.append(date_str)
-                                    if folder_name not in batch_folders:
-                                        batch_folders.append(folder_name)
-                                    break
-
-                        # Determine display info
-                        if len(batch_dates) == 1:
-                            date_display = batch_dates[0]
-                            folder_display = batch_folders[0]
-                            is_multi = False
-                        else:
-                            date_display = f"{batch_dates[0]} to {batch_dates[-1]}"
-                            folder_display = f"{len(batch_dates)} dates"
-                            is_multi = True
-
+                location_groups = self.group_images_by_location(images)
+                total_batches = 0
+                for location, location_images in location_groups:
+                    batches = self.create_batches_from_images(location_images, metadata)
+                    total_batches += len(batches)
+                    for batch_images in batches:
                         batch_info = {
                             "batch_number": batch_number,
-                            "date_folder": date_display,
-                            "folder_path": str(group_data[0][0].parent),
-                            "folder_name": folder_display,
+                            "date_folder": date_str,
+                            "folder_path": str(folder),
+                            "folder_name": folder_name,
                             "images": batch_images,
                             "image_count": len(batch_images),
-                            "is_multi_date": is_multi,
-                            "is_multi_location": False,  # Single location per batch now
-                            "location": location if location != 'Unknown' else None,
-                            "date_list": batch_dates if is_multi else [batch_dates[0]]
+                            "is_multi_date": False,
+                            "location": location,
+                            "is_multi_location": False
                         }
                         all_batches.append(batch_info)
-                        self.stats['batches_created'] += 1
-                        if is_multi:
-                            self.stats['multi_date_batches'] += 1
-
-                        # Print info
-                        loc_info = f" at {location}" if location != 'Unknown' else ""
-                        if is_multi:
-                            print(f"  Batch {batch_number}: {len(batch_images)} images from {len(batch_dates)} dates ({', '.join(batch_dates)}){loc_info}")
-                        else:
-                            print(f"  Batch {batch_number}: 1 image from {batch_dates[0]}{loc_info}")
-
                         batch_number += 1
+                        self.stats['batches_created'] += 1
 
-            else:
-                print(f"Processing {len(single_image_data)} single-image dates (no combining):")
-                # Don't combine - create one batch per single image
-                for folder, date_str, folder_name, img, img_metadata in single_image_data:
-                    location = img_metadata.get('location')
+                if len(location_groups) > 1:
+                    location_summary = ", ".join([f"{len(imgs)} at {loc or 'Unknown'}" for loc, imgs in location_groups])
+                    print(f"  {folder_name}: {len(images)} images → {total_batches} batches ({len(location_groups)} locations: {location_summary})")
+                    self.stats['multi_location_dates'] += 1
+                else:
+                    location = location_groups[0][0] if location_groups else None
+                    loc_str = f" at {location}" if location else ""
+                    print(f"  {folder_name}: {len(images)} images → {total_batches} batches{loc_str}")
 
-                    batch_info = {
-                        "batch_number": batch_number,
-                        "date_folder": date_str,
-                        "folder_path": str(folder),
-                        "folder_name": folder_name,
-                        "images": [img],
-                        "image_count": 1,
-                        "is_multi_date": False,
-                        "is_multi_location": False,
-                        "location": location,
-                        "date_list": [date_str]
-                    }
-                    all_batches.append(batch_info)
-                    self.stats['batches_created'] += 1
-
-                    loc_info = f" at {location}" if location else ""
-                    print(f"  Batch {batch_number}: {folder_name}{loc_info}")
-                    batch_number += 1
+        # Flush any remaining buffered singles at the end
+        flush_pending_singles()
 
         # Update state
         self.state = {

@@ -136,57 +136,45 @@ Any folder starting with a date pattern is considered a date folder.
 
 ## Batching Algorithm
 
-The algorithm uses a four-phase approach:
+The algorithm uses a single chronological pass with buffered singles:
 
-### Phase 1: Categorize Date Folders
+### Phase 1: Extract Metadata (Batch Processing)
 
-1. Scan all date folders and identify:
-   - **Multi-image folders** (2+ images): Keep images together in date-specific, location-aware batches
-   - **Single-image folders** (1 image): Collect for potential cross-date batching
-
-### Phase 2: Extract Metadata (Batch Processing)
-
-**NEW**: Extract all metadata in a single batch exiftool call for efficiency:
+Extract all metadata in a single batch exiftool call for efficiency:
 - **Location hierarchy**: IPTC:City → XMP:City → GPS coordinates fallback
 - **Captions**: XMP:Description or IPTC:Caption-Abstract
 - **Date taken**: DateTimeOriginal
 - **Orientation**: Portrait vs landscape (from width/height)
 - **Dimensions**: Width and height in pixels
 
-This replaces individual exiftool calls per image with one batch call for all images.
+### Phase 2: Chronological Pass with Buffered Singles
 
-### Phase 3: Create Batches (Multi-Image Folders)
+Walk through all date folders in alphabetical (chronological) order. Maintain a buffer of consecutive single-image dates:
 
-**For multi-image folders (location + orientation aware):**
-1. Find all supported image files (jpg, jpeg, png, heic, tiff)
-2. Sort images alphabetically
-3. **Group by location** (consecutive images with same location)
-4. Within each location group:
-   - **Pre-group by orientation** (portrait vs landscape) if metadata available
-   - Split into batches of min_size-max_size images:
-     - Prefers larger batches (if `prefer_large=True`)
-     - Or prefers smaller batches (if `prefer_small=True`)
-     - Respects configurable min/max batch size constraints
-   - Images stay within their date folder AND location
-   - **Splits batch when location changes**
+**For each folder:**
+- **Multi-image folder (2+ images):**
+  1. **Flush the singles buffer** — combine buffered singles into batches (preserving chronological position)
+  2. Group images by location (consecutive images with same location)
+  3. Within each location group, split into batches of min_size-max_size
+  4. Images stay within their date folder AND location
+- **Single-image folder (1 image):**
+  1. Add to the pending singles buffer (do not create a batch yet)
 
-### Phase 4: Create Batches (Single-Image Folders)
+**After all folders:** Flush any remaining singles in the buffer.
 
-**NEW: Location-aware single-image batching**
+### Singles Combining (when flushed)
 
-If `combine_singles=True` (default):
-1. **Group single-image dates by location first**
-2. Within each location group:
-   - **Pre-group by orientation** (portrait vs landscape)
-   - Create batches of min_size-max_size images:
-     - **CAN span multiple dates** (since each date has only 1 image)
-     - **CANNOT span locations** (NEW: respects location boundaries)
-     - Maintains chronological order by date within location
-     - Uses configurable batch size preferences
+If `combine_singles=True` (default) and buffer has 2+ singles:
+1. **Group by location** within the consecutive run
+2. Within each location group, create batches of min_size-max_size images
+3. **CAN span multiple dates** (since each date has only 1 image)
+4. **CANNOT span locations** (respects location boundaries)
+5. Maintains chronological order
 
-If `combine_singles=False`:
-1. Each single-image date becomes its own batch (no combining)
-2. Respects location and date boundaries completely
+If `combine_singles=False` or buffer has only 1 single:
+1. Each single-image date becomes its own batch
+
+**Key benefit:** Single-image dates appear in their correct chronological position in the album, interleaved with multi-image dates, rather than being appended at the end.
 
 **Examples:**
 
