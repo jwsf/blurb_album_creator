@@ -1,11 +1,11 @@
 ---
 name: image-batcher
-description: Batch images from date-organized folders for processing in groups of 1-6, respecting both date and location boundaries
+description: Batch images from date-organized folders for processing in groups of 1-5, respecting both date and location boundaries
 ---
 
 # Image Batcher Skill
 
-This skill manages batching of images for album creation. When images are organized in date-prefixed folders, it creates batches respecting date and location boundaries. When no date folders are found (flat directory), it falls back to shuffling all images and splitting into random batches of 1-6.
+This skill manages batching of images for album creation. When images are organized in date-prefixed folders, it creates batches respecting date and location boundaries. When no date folders are found (flat directory), it falls back to shuffling all images and splitting into random batches of 1-5.
 
 ## New in v2.1
 

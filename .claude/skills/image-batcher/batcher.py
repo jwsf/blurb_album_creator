@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Image Batcher - Manages batches of images from date-organized folders.
-Batches are 1-6 images each, never spanning multiple date folders or locations.
+Batches are 1-5 images each, never spanning multiple date folders or locations.
 
 When no date folders are found, falls back to flat-directory mode:
 groups images by filename commonality (shared non-numeric words) and splits
@@ -32,13 +32,13 @@ SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.heic', '.tiff', '.tif'}
 DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}')
 
 class ImageBatcher:
-    def __init__(self, min_batch_size: int = 1, max_batch_size: int = 6,
+    def __init__(self, min_batch_size: int = 1, max_batch_size: int = 5,
                  combine_singles: bool = True, prefer_large: bool = True):
         """Initialize ImageBatcher with configuration options.
 
         Args:
             min_batch_size: Minimum batch size (default 1)
-            max_batch_size: Maximum batch size (default 6)
+            max_batch_size: Maximum batch size (default 5)
             combine_singles: Whether to combine single-image dates (default True)
             prefer_large: Whether to prefer larger batches (default True)
         """
@@ -820,8 +820,8 @@ Examples:
     # Configuration options
     parser.add_argument('--min-batch', type=int, default=1,
                         help='Minimum batch size (default: 1)')
-    parser.add_argument('--max-batch', type=int, default=6,
-                        help='Maximum batch size (default: 6)')
+    parser.add_argument('--max-batch', type=int, default=5,
+                        help='Maximum batch size (default: 5)')
     parser.add_argument('--no-combine-singles', action='store_true',
                         help='Don\'t combine single-image dates (each becomes its own batch)')
     parser.add_argument('--prefer-small', action='store_true',

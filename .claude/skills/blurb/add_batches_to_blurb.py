@@ -151,7 +151,7 @@ def analyze_template(blurb_file):
             continue
         containers = page.findall('.//container[@type="image"]')
         count = len(containers)
-        if 1 <= count <= 6:
+        if 1 <= count <= 5:
             pages_by_count[count].append(page)
             page_profiles[id(page)] = get_page_orientation_profile(page)
             page_numbers[id(page)] = pn
