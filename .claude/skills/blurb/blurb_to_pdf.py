@@ -18,6 +18,7 @@ try:
     from reportlab.lib.pagesizes import inch
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfbase.pdfmetrics import registerFontFamily
     from PIL import Image
 except ImportError as e:
     print(f"ERROR: Required library not found: {e}")
@@ -27,6 +28,70 @@ except ImportError as e:
 # Global image cache for temp files (Phase 2 optimization)
 # Maps image path -> temp file path to avoid repeated SQLite queries
 _image_temp_cache = {}
+
+# Whether fonts have been registered
+_fonts_registered = False
+
+def register_fonts():
+    """Register Arial TTF fonts from macOS system fonts, with Helvetica fallback."""
+    global _fonts_registered
+    if _fonts_registered:
+        return
+
+    font_dir = "/System/Library/Fonts/Supplemental"
+    font_files = {
+        "Arial": os.path.join(font_dir, "Arial.ttf"),
+        "Arial-Bold": os.path.join(font_dir, "Arial Bold.ttf"),
+        "Arial-Italic": os.path.join(font_dir, "Arial Italic.ttf"),
+        "Arial-BoldItalic": os.path.join(font_dir, "Arial Bold Italic.ttf"),
+    }
+
+    all_found = all(os.path.exists(f) for f in font_files.values())
+    if all_found:
+        for name, path in font_files.items():
+            pdfmetrics.registerFont(TTFont(name, path))
+        registerFontFamily(
+            "Arial",
+            normal="Arial",
+            bold="Arial-Bold",
+            italic="Arial-Italic",
+            boldItalic="Arial-BoldItalic",
+        )
+        print("Registered Arial font family from system fonts")
+    else:
+        # Fallback: register Helvetica aliases so resolve_font_name always works
+        print("Warning: Arial TTF not found, falling back to Helvetica")
+
+    _fonts_registered = True
+
+
+def resolve_font_name(bold=False, italic=False):
+    """Return the registered font name for the given bold/italic combination.
+
+    Uses Arial if registered, otherwise falls back to Helvetica.
+    """
+    font_dir = "/System/Library/Fonts/Supplemental"
+    arial_available = os.path.exists(os.path.join(font_dir, "Arial.ttf"))
+
+    if arial_available:
+        if bold and italic:
+            return "Arial-BoldItalic"
+        elif bold:
+            return "Arial-Bold"
+        elif italic:
+            return "Arial-Italic"
+        else:
+            return "Arial"
+    else:
+        # Helvetica built-in variants
+        if bold and italic:
+            return "Helvetica-BoldOblique"
+        elif bold:
+            return "Helvetica-Bold"
+        elif italic:
+            return "Helvetica-Oblique"
+        else:
+            return "Helvetica"
 
 def preextract_all_images(blurb_file, image_paths):
     """Pre-extract all images to temp files (Phase 2 optimization).
@@ -109,10 +174,31 @@ def extract_image_bytes_from_archive(blurb_file, image_path):
             return None
     return None
 
-def parse_html_text(cdata_text):
-    """Parse HTML-like text from CDATA and return plain text."""
+def parse_rich_text(cdata_text):
+    """Parse HTML text from CDATA into structured paragraph objects.
+
+    Returns a list of paragraph dicts:
+    [
+        {
+            "alignment": "center" | "left" | "right",
+            "runs": [
+                {
+                    "text": "Hello",
+                    "font_size": 12,
+                    "bold": False,
+                    "italic": False,
+                    "color": (0.0, 0.0, 0.0),
+                }
+            ]
+        },
+        ...
+    ]
+    """
+    import re
+    from html.parser import HTMLParser
+
     if not cdata_text:
-        return ""
+        return []
 
     # Remove CDATA wrapper
     text = cdata_text.strip()
@@ -120,46 +206,95 @@ def parse_html_text(cdata_text):
         text = text[9:]
     if text.endswith(']]>'):
         text = text[:-3]
+    text = text.strip()
 
-    # Simple HTML tag removal
-    import re
-    text = re.sub(r'<[^>]+>', '', text)
-    text = re.sub(r'&nbsp;', ' ', text)
-    text = re.sub(r'&amp;', '&', text)
-    text = re.sub(r'&lt;', '<', text)
-    text = re.sub(r'&gt;', '>', text)
+    if not text:
+        return []
 
-    return text.strip()
+    class RichTextParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.paragraphs = []
+            self.current_para = None
+            self.bold_depth = 0
+            self.italic_depth = 0
+            self.current_font_size = 12
+            self.current_color = (0.0, 0.0, 0.0)
 
-def extract_text_color(cdata_text):
-    """Extract color from HTML style attribute in CDATA text."""
-    if not cdata_text:
-        return (0, 0, 0)  # Default to black
+        def handle_starttag(self, tag, attrs):
+            attrs_dict = dict(attrs)
+            tag_lower = tag.lower()
 
-    import re
-    # Look for color:#RRGGBB in style attribute
-    color_match = re.search(r'color:#([0-9A-Fa-f]{6})', cdata_text)
-    if color_match:
-        hex_color = color_match.group(1)
-        r = int(hex_color[0:2], 16) / 255.0
-        g = int(hex_color[2:4], 16) / 255.0
-        b = int(hex_color[4:6], 16) / 255.0
-        return (r, g, b)
+            if tag_lower == 'p':
+                alignment = "left"
+                cls = attrs_dict.get('class', '')
+                if 'align-center' in cls:
+                    alignment = "center"
+                elif 'align-right' in cls:
+                    alignment = "right"
+                self.current_para = {"alignment": alignment, "runs": []}
 
-    return (0, 0, 0)  # Default to black
+            elif tag_lower == 'span':
+                style = attrs_dict.get('style', '')
+                # Extract font-size
+                size_match = re.search(r'font-size:(\d+)px', style)
+                if size_match:
+                    self.current_font_size = int(size_match.group(1))
+                # Extract color
+                color_match = re.search(r'color:#([0-9A-Fa-f]{6})', style)
+                if color_match:
+                    hex_color = color_match.group(1)
+                    r = int(hex_color[0:2], 16) / 255.0
+                    g = int(hex_color[2:4], 16) / 255.0
+                    b = int(hex_color[4:6], 16) / 255.0
+                    self.current_color = (r, g, b)
 
-def extract_font_size(cdata_text):
-    """Extract font size from HTML style attribute in CDATA text."""
-    if not cdata_text:
-        return 12  # Default font size
+            elif tag_lower == 'strong' or tag_lower == 'b':
+                self.bold_depth += 1
 
-    import re
-    # Look for font-size:XXpx in style attribute
-    size_match = re.search(r'font-size:(\d+)px', cdata_text)
-    if size_match:
-        return int(size_match.group(1))
+            elif tag_lower == 'em' or tag_lower == 'i':
+                self.italic_depth += 1
 
-    return 12  # Default font size
+        def handle_endtag(self, tag):
+            tag_lower = tag.lower()
+            if tag_lower == 'p':
+                if self.current_para is not None:
+                    self.paragraphs.append(self.current_para)
+                    self.current_para = None
+            elif tag_lower == 'strong' or tag_lower == 'b':
+                self.bold_depth = max(0, self.bold_depth - 1)
+            elif tag_lower == 'em' or tag_lower == 'i':
+                self.italic_depth = max(0, self.italic_depth - 1)
+
+        def handle_data(self, data):
+            if self.current_para is None:
+                return
+            # Decode HTML entities handled by HTMLParser automatically
+            # Strip zero-width spaces and other invisible Unicode
+            cleaned = data.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '')
+            cleaned = cleaned.replace('\ufeff', '')  # BOM
+            if not cleaned or cleaned.isspace():
+                return
+            self.current_para["runs"].append({
+                "text": cleaned,
+                "font_size": self.current_font_size,
+                "bold": self.bold_depth > 0,
+                "italic": self.italic_depth > 0,
+                "color": self.current_color,
+            })
+
+        def handle_entityref(self, name):
+            # HTMLParser calls handle_data for most entities, but handle edge cases
+            entity_map = {'nbsp': ' ', 'amp': '&', 'lt': '<', 'gt': '>'}
+            char = entity_map.get(name, '')
+            if char:
+                self.handle_data(char)
+
+    parser = RichTextParser()
+    parser.feed(text)
+
+    # Filter out paragraphs with no visible text runs
+    return [p for p in parser.paragraphs if p["runs"]]
 
 def split_coversheet(coversheet, page_width, page_height):
     """Split a coversheet element into separate front and back cover elements.
@@ -244,6 +379,9 @@ def convert_blurb_to_pdf(blurb_file):
 
     # Generate PDF filename
     pdf_file = str(Path(blurb_file).with_suffix('.pdf'))
+
+    # Register fonts before any canvas operations
+    register_fonts()
 
     print(f"Converting: {os.path.basename(blurb_file)}")
     print(f"Output: {os.path.basename(pdf_file)}")
@@ -610,8 +748,108 @@ def process_image_container(c, container, blurb_file, page_height):
     except Exception as e:
         print(f"    Warning: Could not draw image {src}: {e}")
 
+def _word_wrap_runs(c, runs, max_width):
+    """Word-wrap a list of text runs into lines that fit within max_width.
+
+    Each run has: text, font_size, bold, italic, color.
+    Returns a list of lines, where each line is a list of run fragments:
+        [{"text": ..., "font_name": ..., "font_size": ..., "color": ..., "width": ...}, ...]
+    """
+    lines = []
+    current_line = []
+    current_width = 0.0
+
+    for run in runs:
+        font_name = resolve_font_name(bold=run["bold"], italic=run["italic"])
+        font_size = run["font_size"]
+        color = run["color"]
+        words = run["text"].split()
+
+        for i, word in enumerate(words):
+            # Add space before word if not the first item on the line
+            prefix = " " if current_line and i > 0 or (current_line and i == 0) else ""
+            # If this is the first word of a new run but line already has content, add space
+            if i == 0 and current_line:
+                # Check if previous run ended with space or this run starts fresh
+                prefix = " "
+
+            test_text = prefix + word
+            word_width = c.stringWidth(test_text, font_name, font_size)
+
+            if current_width + word_width <= max_width or not current_line:
+                # Word fits on current line (or line is empty, must add at least one word)
+                current_line.append({
+                    "text": test_text,
+                    "font_name": font_name,
+                    "font_size": font_size,
+                    "color": color,
+                    "width": word_width,
+                })
+                current_width += word_width
+            else:
+                # Word doesn't fit, start a new line
+                lines.append(current_line)
+                text_no_prefix = word
+                word_width_no_prefix = c.stringWidth(text_no_prefix, font_name, font_size)
+                current_line = [{
+                    "text": text_no_prefix,
+                    "font_name": font_name,
+                    "font_size": font_size,
+                    "color": color,
+                    "width": word_width_no_prefix,
+                }]
+                current_width = word_width_no_prefix
+
+    if current_line:
+        lines.append(current_line)
+
+    return lines
+
+
+def _measure_layout(c, paragraphs, container_width, scale=1.0):
+    """Measure total height of paragraphs with optional scale factor applied to font sizes.
+
+    Returns (total_height, layout) where layout is a list of:
+        {"line_fragments": [...], "alignment": str, "line_height": float, "font_size": float}
+    """
+    layout = []
+    total_height = 0.0
+
+    for para in paragraphs:
+        # Apply scale to runs
+        scaled_runs = []
+        for run in para["runs"]:
+            scaled_runs.append({
+                "text": run["text"],
+                "font_size": max(6, run["font_size"] * scale),
+                "bold": run["bold"],
+                "italic": run["italic"],
+                "color": run["color"],
+            })
+
+        # Determine the dominant font size for line height
+        max_font_size = max(r["font_size"] for r in scaled_runs)
+        line_height = max_font_size * 1.3
+
+        # Word-wrap with margin
+        wrapped_lines = _word_wrap_runs(c, scaled_runs, container_width - 10)
+
+        for line_frags in wrapped_lines:
+            layout.append({
+                "line_fragments": line_frags,
+                "alignment": para["alignment"],
+                "line_height": line_height,
+                "font_size": max_font_size,
+            })
+            total_height += line_height
+
+    return total_height, layout
+
+
 def process_text_container(c, container, page_height):
-    """Process a text container and draw text on PDF with correct colors and rotation."""
+    """Process a text container and draw text on PDF with rich formatting."""
+    import math
+
     # Get container dimensions and position
     x = float(container.get('x', 0))
     y = float(container.get('y', 0))
@@ -623,18 +861,12 @@ def process_text_container(c, container, page_height):
     if text_elem is None or not text_elem.text:
         return
 
-    # Parse text content
-    text_content = parse_html_text(text_elem.text)
-    if not text_content:
+    # Parse rich text into structured paragraphs
+    paragraphs = parse_rich_text(text_elem.text)
+    if not paragraphs:
         return
 
-    # Extract color and font size from HTML
-    text_color = extract_text_color(text_elem.text)
-    font_size = extract_font_size(text_elem.text)
-
     # Parse transform matrix for rotation
-    # Transform format: "a b c d" representing matrix | a  c |
-    #                                                  | b  d |
     transform = container.get('transform', '1 0 0 1')
     rotation_angle = 0
 
@@ -644,22 +876,13 @@ def process_text_container(c, container, page_height):
             if len(parts) == 4:
                 m_a, m_b, m_c, m_d = [float(p) for p in parts]
 
-                # Calculate rotation angle from matrix
-                # Common cases:
-                # '0 1 -1 0' = 90° counterclockwise
-                # '0 -1 1 0' = 90° clockwise (270° or -90°)
-                # '-1 0 0 -1' = 180°
-                # '1 0 0 1' = no rotation
-
-                import math
                 if abs(m_a) < 0.01 and abs(m_b - 1) < 0.01 and abs(m_c + 1) < 0.01 and abs(m_d) < 0.01:
-                    rotation_angle = 90  # 90° CCW
+                    rotation_angle = 90
                 elif abs(m_a) < 0.01 and abs(m_b + 1) < 0.01 and abs(m_c - 1) < 0.01 and abs(m_d) < 0.01:
-                    rotation_angle = -90  # 90° CW
+                    rotation_angle = -90
                 elif abs(m_a + 1) < 0.01 and abs(m_b) < 0.01 and abs(m_c) < 0.01 and abs(m_d + 1) < 0.01:
-                    rotation_angle = 180  # 180°
+                    rotation_angle = 180
                 else:
-                    # Generic case: atan2(b, a) gives rotation angle
                     rotation_angle = math.degrees(math.atan2(m_b, m_a))
         except (ValueError, AttributeError):
             pass
@@ -667,120 +890,83 @@ def process_text_container(c, container, page_height):
     # Convert y coordinate (PDF origin is bottom-left, blurb is top-left)
     pdf_y = page_height - y - height
 
-    # Set text color from .blurb file
-    c.setFillColorRGB(text_color[0], text_color[1], text_color[2])
+    # Determine effective text area for rotated containers
+    if abs(rotation_angle) in (90, 270):
+        text_area_width = height
+        text_area_height = width
+    else:
+        text_area_width = width
+        text_area_height = height
 
-    # Quick check: estimate if text will fit at original size
-    # This avoids the expensive auto-sizing loop for most containers
-    c.setFont("Helvetica", font_size)
-    line_height = font_size * 1.3  # 1.3x for proper spacing with descenders
-    estimated_lines = len(text_content) / (width / (font_size * 0.5))  # Rough estimate
-    estimated_height = estimated_lines * line_height
+    # Auto-scale: try scale=1.0 first, reduce if text overflows
+    scale = 1.0
+    min_scale = 0.5
+    total_h, layout = _measure_layout(c, paragraphs, text_area_width, scale)
 
-    # Auto-scale font size to fit container
-    actual_font_size = font_size
-    min_font_size = max(6, font_size * 0.5)  # Don't go below 6pt or 50% of original
-    lines = []
+    while total_h > text_area_height and scale > min_scale:
+        scale -= 0.05
+        total_h, layout = _measure_layout(c, paragraphs, text_area_width, scale)
 
-    # Always try to fit text by adjusting font size
-    while actual_font_size >= min_font_size:
-        c.setFont("Helvetica", actual_font_size)
-        line_height = actual_font_size * 1.3  # 1.3x for proper spacing with descenders
-
-        # Word wrap at current font size
-        lines = []
-        words = text_content.split()
-        current_line = []
-
-        for word in words:
-            test_line = ' '.join(current_line + [word])
-            if c.stringWidth(test_line, "Helvetica", actual_font_size) <= width - 10:
-                current_line.append(word)
-            else:
-                if current_line:
-                    lines.append(' '.join(current_line))
-                current_line = [word]
-
-        if current_line:
-            lines.append(' '.join(current_line))
-
-        # Check if all lines fit in container height (with space for descenders on last line)
-        descender_space = actual_font_size * 0.3  # Extra space for descenders on last line
-        total_height = len(lines) * line_height + descender_space
-        if total_height <= height:
-            # Text fits! Use this font size
+    # Truncate lines that exceed container height
+    truncated_layout = []
+    used_height = 0.0
+    for item in layout:
+        if used_height + item["line_height"] > text_area_height + 1:  # +1 for rounding tolerance
             break
-
-        # Text doesn't fit, try smaller font
-        actual_font_size -= 1
-
-    # If still doesn't fit at minimum size, truncate lines
-    line_height = actual_font_size * 1.3  # 1.3x for proper spacing with descenders
-    descender_space = actual_font_size * 0.3
-    max_lines = int((height - descender_space) / line_height)
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
+        truncated_layout.append(item)
+        used_height += item["line_height"]
+    layout = truncated_layout
 
     # Apply clipping to keep text within container bounds
     c.saveState()
-
-    # Create clipping path for container (prevent text overflow)
     clip_path = c.beginPath()
     clip_path.rect(x, pdf_y, width, height)
     c.clipPath(clip_path, stroke=0)
 
+    def draw_layout_lines(layout, origin_x, origin_y, area_width):
+        """Draw layout lines starting from origin, moving downward."""
+        cursor_y = origin_y
+        for item in layout:
+            cursor_y -= item["line_height"]
+            alignment = item["alignment"]
+
+            # Calculate total line width for centering/right alignment
+            total_line_width = sum(frag["width"] for frag in item["line_fragments"])
+
+            if alignment == "center":
+                draw_x = origin_x + (area_width - total_line_width) / 2
+            elif alignment == "right":
+                draw_x = origin_x + area_width - total_line_width - 5
+            else:
+                draw_x = origin_x + 5  # Left with small margin
+
+            for frag in item["line_fragments"]:
+                c.setFillColorRGB(frag["color"][0], frag["color"][1], frag["color"][2])
+                c.setFont(frag["font_name"], frag["font_size"])
+                c.drawString(draw_x, cursor_y, frag["text"])
+                draw_x += frag["width"]
+
     if rotation_angle != 0:
-        # For rotated text, we need to adjust the origin point
-        # Rotation in ReportLab is around the origin, so we translate first
         if abs(rotation_angle - 90) < 0.1:
-            # 90° CCW: text reads upward (spine text)
-            # After 90° CCW rotation:
-            #   - Rotated +X axis points upward in page space (original +Y)
-            #   - Rotated +Y axis points leftward in page space (original -X)
-            # Place origin at the right edge of where text should appear horizontally
-            text_x = x + height  # Right edge of text band in page space
-            text_y = pdf_y       # Bottom of text area
-            c.translate(text_x, text_y)
+            # 90 CCW: text reads upward (spine text)
+            c.translate(x + height, pdf_y)
             c.rotate(90)
-            # Draw text going upward: increment rotated X (page Y), keep rotated Y at 0
-            for i, line in enumerate(lines):
-                # Rotated X increases = page Y increases (upward)
-                # Rotated Y = 0 keeps us at the origin's page X position
-                c.drawString(5 + i * line_height, 0, line)
+            # In rotated space, width=height of container, height=width of container
+            draw_layout_lines(layout, 0, text_area_height, text_area_width)
         elif abs(rotation_angle + 90) < 0.1:
-            # 90° CW: text reads downward (spine text)
-            # After 90° CW rotation:
-            #   - Rotated +X axis points downward in page space (original -Y)
-            #   - Rotated +Y axis points rightward in page space (original +X)
-            # Place origin at the left edge of where text should appear horizontally
-            text_x = x           # Left edge of text band in page space
-            text_y = pdf_y + height  # Top of text area (will draw downward)
-            c.translate(text_x, text_y)
+            # 90 CW: text reads downward
+            c.translate(x, pdf_y + height)
             c.rotate(-90)
-            # Draw text going downward: increment rotated X (page -Y), keep rotated Y at 0
-            for i, line in enumerate(lines):
-                # Rotated X increases = page Y decreases (downward)
-                # Rotated Y = 0 keeps us at the origin's page X position
-                c.drawString(5 + i * line_height, 0, line)
+            draw_layout_lines(layout, 0, text_area_height, text_area_width)
         else:
             # Generic rotation
-            text_x = x + width / 2
-            text_y = pdf_y + height / 2
-            c.translate(text_x, text_y)
+            c.translate(x + width / 2, pdf_y + height / 2)
             c.rotate(rotation_angle)
-            for i, line in enumerate(lines):
-                c.drawString(-c.stringWidth(line, "Helvetica", font_size) / 2, -i * line_height, line)
-
+            draw_layout_lines(layout, -text_area_width / 2, text_area_height / 2, text_area_width)
     else:
         # No rotation - draw normally
-        text_y = pdf_y + height - line_height  # Start from top of container
+        draw_layout_lines(layout, x, pdf_y + height, width)
 
-        # Draw text with clipping applied (from saveState above)
-        for line in lines:
-            c.drawString(x + 5, text_y, line)
-            text_y -= line_height
-
-    # Restore graphics state (removes clipping)
     c.restoreState()
 
 def main():
