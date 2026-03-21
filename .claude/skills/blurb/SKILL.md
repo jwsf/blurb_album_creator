@@ -2054,6 +2054,13 @@ Convert a .blurb file to PDF format with all images and text embedded.
 - The script shows progress indicators and time estimates
 - Do not interrupt the process - wait for completion
 
+**⚠️ CRITICAL: No Parallel PDF Generation**
+- When converting multiple .blurb files to PDF, ALWAYS run conversions **one at a time, sequentially**
+- NEVER launch multiple `blurb_to_pdf.py` processes simultaneously (no parallel Bash calls, no background processes)
+- Wait for each PDF conversion to fully complete before starting the next one
+- PDF conversion is CPU-intensive and memory-intensive — running multiple conversions in parallel causes resource contention, slower overall completion, and potential failures
+- Use a sequential loop or chain conversions with `&&` if converting multiple files
+
 **Requirements:**
 - Python 3 with reportlab library
 - Install with: `pip3 install --user --break-system-packages reportlab`
