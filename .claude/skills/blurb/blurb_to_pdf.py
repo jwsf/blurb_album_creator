@@ -49,6 +49,7 @@ Notes
 - Exit code 0 on success, 1 on failure.
 """
 
+import gc
 import os
 import sys
 import subprocess
@@ -640,6 +641,10 @@ def convert_blurb_to_pdf(blurb_file):
             process_page(c, page, blurb_file, page_width, page_height, f"Page {page_num}")
             c.showPage()
 
+            # Periodically force garbage collection to reclaim image memory
+            if page_count % 10 == 0:
+                gc.collect()
+
     # Process back cover as LAST page of PDF
     if back_cover is not None:
         page_count += 1
@@ -665,6 +670,12 @@ def convert_blurb_to_pdf(blurb_file):
 
     # Cleanup temp files
     os.remove(xml_file)
+    for temp_path in _image_temp_cache.values():
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+    _image_temp_cache.clear()
 
     return True
 
@@ -774,9 +785,6 @@ def process_image_container(c, container, blurb_file, page_height):
         # Create ImageReader for ReportLab
         image_reader = ImageReader(img_buffer)
 
-        # Clean up original temp file
-        os.unlink(temp_image)
-
         # Calculate scale and position based on autolayout
         if autolayout == 'fill':
             # Calculate scale to fill container (crop to fit)
@@ -822,6 +830,11 @@ def process_image_container(c, container, blurb_file, page_height):
                    preserveAspectRatio=True, mask='auto')
 
         c.restoreState()
+
+        # Free memory: close PIL image and BytesIO buffer
+        img.close()
+        img_buffer.close()
+        del img, img_buffer, image_reader
 
     except Exception as e:
         print(f"    Warning: Could not draw image {src}: {e}")

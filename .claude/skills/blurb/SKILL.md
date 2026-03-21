@@ -2220,6 +2220,11 @@ The PDF converter implements three phases of optimization to reduce conversion t
 
 **Combined Performance**: All three phases together provide 44% speedup while maintaining acceptable quality.
 
+**Memory Optimizations**:
+- PIL images and BytesIO buffers are explicitly closed after each image is drawn to free pixel data
+- Garbage collection is forced every 10 pages to reclaim lingering objects
+- Temp image files are kept on disk during conversion (for reuse across pages) and cleaned up in a single pass at the end
+
 **Conversion Time Examples**:
 - 122 pages (2026 Photo Album): 1m 39s
 - 148 pages (2000-2002 Photos): 56s
