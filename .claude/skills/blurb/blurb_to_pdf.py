@@ -124,13 +124,15 @@ def preextract_all_images(blurb_file, image_paths):
 
 def extract_bbf2_xml(blurb_file):
     """Extract bbf2.xml from .blurb file."""
+    # Use a unique temp path based on PID to avoid collisions when running in parallel
+    temp_path = f'/tmp/bbf2_pdf_{os.getpid()}.xml'
     subprocess.run(
-        ['sqlite3', blurb_file, "SELECT writefile('/tmp/bbf2_pdf.xml', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
+        ['sqlite3', blurb_file, f"SELECT writefile('{temp_path}', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
         capture_output=True,
         text=True,
         check=True
     )
-    return '/tmp/bbf2_pdf.xml'
+    return temp_path
 
 def extract_image_from_archive(blurb_file, image_path):
     """Extract an image from the .blurb archive to temp file.
