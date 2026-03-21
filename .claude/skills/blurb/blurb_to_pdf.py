@@ -220,6 +220,9 @@ def parse_rich_text(cdata_text):
             self.current_para = None
             self.bold_depth = 0
             self.italic_depth = 0
+            # Track style-based bold/italic per span (stack of bools)
+            self.span_bold_stack = []
+            self.span_italic_stack = []
             self.current_font_size = 12
             self.current_color = (0.0, 0.0, 0.0)
 
@@ -238,18 +241,28 @@ def parse_rich_text(cdata_text):
 
             elif tag_lower == 'span':
                 style = attrs_dict.get('style', '')
-                # Extract font-size
-                size_match = re.search(r'font-size:(\d+)px', style)
+                # Extract font-size (handles both "font-size:12px" and "font-size: 12px")
+                size_match = re.search(r'font-size:\s*(\d+)px', style)
                 if size_match:
                     self.current_font_size = int(size_match.group(1))
-                # Extract color
-                color_match = re.search(r'color:#([0-9A-Fa-f]{6})', style)
+                # Extract color (handles both "color:#fff" and "color: #fff")
+                color_match = re.search(r'(?<![a-z-])color:\s*#([0-9A-Fa-f]{6})', style)
                 if color_match:
                     hex_color = color_match.group(1)
                     r = int(hex_color[0:2], 16) / 255.0
                     g = int(hex_color[2:4], 16) / 255.0
                     b = int(hex_color[4:6], 16) / 255.0
                     self.current_color = (r, g, b)
+                # Extract font-weight: bold from style attribute
+                span_bold = bool(re.search(r'font-weight:\s*bold', style))
+                if span_bold:
+                    self.bold_depth += 1
+                self.span_bold_stack.append(span_bold)
+                # Extract font-style: italic from style attribute
+                span_italic = bool(re.search(r'font-style:\s*italic', style))
+                if span_italic:
+                    self.italic_depth += 1
+                self.span_italic_stack.append(span_italic)
 
             elif tag_lower == 'strong' or tag_lower == 'b':
                 self.bold_depth += 1
@@ -263,6 +276,14 @@ def parse_rich_text(cdata_text):
                 if self.current_para is not None:
                     self.paragraphs.append(self.current_para)
                     self.current_para = None
+            elif tag_lower == 'span':
+                # Undo style-based bold/italic for this span
+                if self.span_bold_stack:
+                    if self.span_bold_stack.pop():
+                        self.bold_depth = max(0, self.bold_depth - 1)
+                if self.span_italic_stack:
+                    if self.span_italic_stack.pop():
+                        self.italic_depth = max(0, self.italic_depth - 1)
             elif tag_lower == 'strong' or tag_lower == 'b':
                 self.bold_depth = max(0, self.bold_depth - 1)
             elif tag_lower == 'em' or tag_lower == 'i':
