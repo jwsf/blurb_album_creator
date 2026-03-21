@@ -3,6 +3,50 @@
 Convert a .blurb file to PDF format.
 
 Exports covers, inside covers, and all content pages with images and text.
+
+Stand-alone usage
+-----------------
+    python3 blurb_to_pdf.py <blurb_file>
+
+The output PDF is written to the same directory with the same base name:
+    python3 blurb_to_pdf.py "outputs/My Album 2026-03-21 10:00.blurb"
+    # -> outputs/My Album 2026-03-21 10:00.pdf
+
+Requirements
+------------
+    pip3 install --user --break-system-packages reportlab pillow
+
+- Python 3
+- reportlab (PDF generation)
+- Pillow / PIL (image processing and EXIF orientation)
+- macOS with Arial fonts in /System/Library/Fonts/Supplemental/ (falls back
+  to Helvetica if Arial is not available)
+- sqlite3 CLI (ships with macOS; used to extract images from the .blurb
+  SQLite archive)
+
+What the PDF contains
+---------------------
+- Front and back covers (softcover, imagewrap, or dustjacket)
+- All content pages with images positioned and cropped to match Bookwright
+- Text containers with font size, color, alignment, and rotation preserved
+- Background colors per page
+- EXIF orientation applied automatically to images
+- PDF metadata (title, author) from the .blurb book info
+
+What the PDF omits
+------------------
+- Inside covers (masterpage section)
+- Spine (not applicable to PDF)
+- Elements that sit entirely on the spine area
+
+Notes
+-----
+- Conversion is CPU and memory intensive.  When converting multiple .blurb
+  files, run them one at a time — do not run in parallel.
+- Large albums (50+ pages) can take several minutes.  The script prints
+  progress indicators and time estimates while it runs.
+- An existing PDF at the output path is overwritten without prompting.
+- Exit code 0 on success, 1 on failure.
 """
 
 import os
@@ -1005,11 +1049,18 @@ def process_text_container(c, container, page_height):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: blurb_to_pdf.py <blurb_file>")
+        print("Usage: python3 blurb_to_pdf.py <blurb_file>")
         print()
-        print("Converts a .blurb file to PDF format.")
-        print("The PDF will include covers, inside covers, and all content pages")
-        print("with embedded images and text.")
+        print("Convert a .blurb file (Bookwright SQLite archive) to PDF.")
+        print()
+        print("The output PDF is written next to the input file with the same")
+        print("base name.  An existing PDF at that path is overwritten.")
+        print()
+        print("Example:")
+        print('  python3 blurb_to_pdf.py "outputs/My Album.blurb"')
+        print("  # -> outputs/My Album.pdf")
+        print()
+        print("Requires: pip3 install --user --break-system-packages reportlab pillow")
         sys.exit(1)
 
     blurb_file = sys.argv[1]
