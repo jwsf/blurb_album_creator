@@ -604,11 +604,22 @@ def convert_blurb_to_pdf(blurb_file):
 def process_page(c, page_elem, blurb_file, page_width, page_height, page_label):
     """Process a single page and add to PDF."""
     # Set background color
+    # Colors can be #RRGGBB (6 hex) or #RRGGBBAA (8 hex with alpha).
+    # Alpha 00 = fully transparent, meaning "no background" — treat as white for PDF.
     color = page_elem.get('color', '#ffffff')
     if color.startswith('#'):
-        r = int(color[1:3], 16) / 255.0
-        g = int(color[3:5], 16) / 255.0
-        b = int(color[5:7], 16) / 255.0
+        hex_digits = color[1:]
+        alpha = 1.0
+        if len(hex_digits) == 8:
+            alpha = int(hex_digits[6:8], 16) / 255.0
+            hex_digits = hex_digits[:6]
+        if alpha == 0:
+            # Fully transparent background — use white in PDF
+            r, g, b = 1.0, 1.0, 1.0
+        else:
+            r = int(hex_digits[0:2], 16) / 255.0
+            g = int(hex_digits[2:4], 16) / 255.0
+            b = int(hex_digits[4:6], 16) / 255.0
         c.setFillColorRGB(r, g, b)
         c.rect(0, 0, page_width, page_height, fill=1, stroke=0)
 
