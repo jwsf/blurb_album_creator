@@ -1,6 +1,6 @@
 ---
 name: image
-description: Extract and update metadata from image files including people names and locations
+description: Extract and update metadata from image files including people names and locations. Captions are generated dynamically from face tags and a cache-first location lookup (IPTC city, then GPS geocoding, then directory inference). The workflow writes metadata updates back to image files, including cached location values and richer location detail used by captioning.
 ---
 
 # Image Metadata Handler Skill
