@@ -46,12 +46,24 @@ assert_contains() {
   local haystack="$1"
   local needle="$2"
   local msg="$3"
-  if grep -Fq "$needle" <<<"$haystack"; then
+  if grep -Fq -- "$needle" <<<"$haystack"; then
     return 0
   fi
   echo "  missing:  $needle"
   echo "  $msg"
   return 1
+}
+
+assert_not_contains() {
+  local haystack="$1"
+  local needle="$2"
+  local msg="$3"
+  if grep -Fq -- "$needle" <<<"$haystack"; then
+    echo "  unexpected: $needle"
+    echo "  $msg"
+    return 1
+  fi
+  return 0
 }
 
 run_test() {
@@ -563,6 +575,40 @@ test_skill_doc_mentions_core_behaviors() {
   assert_contains "$body" "Captions are NOT cached" "Skill doc should state dynamic captions"
 }
 
+test_skill_doc_no_return_trap_for_temp_cleanup() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_not_contains "$body" "trap 'rm -f \"\$temp_locations\" \"\$coords_file\"' RETURN" "RETURN trap-based cleanup should not be used in infer_directory_location"
+}
+
+test_skill_doc_high_precision_coordinate_keys() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_contains "$body" "%.5f,%.5f" "Coordinate cache keys should use 5-decimal precision"
+}
+
+test_skill_doc_optimized_cache_lookup_strategy() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_contains "$body" "awk -F'\\t' 'NR==FNR" "regenerate_all_locations should use keyed join strategy" || return 1
+  assert_not_contains "$body" "grep \"^\$key=\" \"\$coords_cache\"" "O(n^2) grep-per-image cache lookup should not be present"
+}
+
+test_skill_doc_curl_resilience_flags() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_contains "$body" "--connect-timeout 5" "curl should define connect timeout" || return 1
+  assert_contains "$body" "--max-time 20" "curl should define max request time" || return 1
+  assert_contains "$body" "--retry 2" "curl should retry transient failures"
+}
+
+test_skill_doc_analyze_directory_top_level_only() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_contains "$body" "Analyze All Images in Directory (Top-Level Only)" "analyze_directory section should explicitly state top-level-only behavior" || return 1
+  assert_contains "$body" "does not scan subdirectories" "analyze_directory description should clarify non-recursive behavior"
+}
+
 main() {
   info "Using test root: $TEST_ROOT"
   if [[ "$USE_LIVE_GEOCODER" -eq 1 ]]; then
@@ -613,6 +659,11 @@ main() {
   run_test "CSV export columns" test_csv_export_columns
   run_test "Recursive directory processing" test_recursive_directory_processing
   run_test "Skill doc mentions core behaviors" test_skill_doc_mentions_core_behaviors
+  run_test "Skill doc avoids RETURN trap cleanup" test_skill_doc_no_return_trap_for_temp_cleanup
+  run_test "Skill doc uses high-precision coord keys" test_skill_doc_high_precision_coordinate_keys
+  run_test "Skill doc uses optimized cache lookup" test_skill_doc_optimized_cache_lookup_strategy
+  run_test "Skill doc has curl resilience flags" test_skill_doc_curl_resilience_flags
+  run_test "Skill doc marks top-level-only analysis" test_skill_doc_analyze_directory_top_level_only
 
   echo
   echo "Test summary: pass=$PASS_COUNT fail=$FAIL_COUNT skip=$SKIP_COUNT"
