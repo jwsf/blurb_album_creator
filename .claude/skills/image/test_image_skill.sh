@@ -673,6 +673,27 @@ test_skill_doc_read_cached_location_has_local_var() {
   assert_contains "$body" "  local location" "read_cached_location should localize location variable"
 }
 
+test_skill_doc_has_cached_location_has_local_var() {
+  local fn_block
+  fn_block="$(awk '
+    /has_cached_location\(\) \{/ {in_fn=1}
+    in_fn {print}
+    in_fn && /^}/ {exit}
+  ' "$SKILL_FILE")"
+  assert_contains "$fn_block" "has_cached_location()" "has_cached_location helper should exist" || return 1
+  assert_contains "$fn_block" "  local location" "has_cached_location should localize location variable" || return 1
+  assert_contains "$fn_block" 'location=$(exiftool -IPTC:City -s3 "$image" 2>/dev/null)' "has_cached_location should read IPTC City"
+}
+
+test_skill_doc_traps_are_restored_after_temp_cleanup() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_contains "$body" 'old_int_trap=$(trap -p INT || true)' "temp cleanup snippets should capture existing INT trap" || return 1
+  assert_contains "$body" 'old_term_trap=$(trap -p TERM || true)' "temp cleanup snippets should capture existing TERM trap" || return 1
+  assert_contains "$body" 'if [ -n "$old_int_trap" ]; then' "temp cleanup snippets should restore or clear INT trap" || return 1
+  assert_contains "$body" 'if [ -n "$old_term_trap" ]; then' "temp cleanup snippets should restore or clear TERM trap"
+}
+
 main() {
   info "Using test root: $TEST_ROOT"
   if [[ "$USE_LIVE_GEOCODER" -eq 1 ]]; then
@@ -736,6 +757,8 @@ main() {
   run_test "Skill doc removes first-pass inference" test_skill_doc_analyze_directory_no_first_pass_inference
   run_test "Skill doc reverse sample is hardened" test_skill_doc_reverse_geocode_sample_is_hardened
   run_test "Skill doc localizes cached-location var" test_skill_doc_read_cached_location_has_local_var
+  run_test "Skill doc localizes has-cached var" test_skill_doc_has_cached_location_has_local_var
+  run_test "Skill doc restores prior signal traps" test_skill_doc_traps_are_restored_after_temp_cleanup
 
   echo
   echo "Test summary: pass=$PASS_COUNT fail=$FAIL_COUNT skip=$SKIP_COUNT"

@@ -235,6 +235,7 @@ fi
 # Check if image has cached location
 has_cached_location() {
   local image="$1"
+  local location
 
   location=$(exiftool -IPTC:City -s3 "$image" 2>/dev/null)
 
@@ -339,12 +340,15 @@ regenerate_all_locations() {
 
   # Build temporary files for deduped keys and lookups
   local coords_keys coords_map image_keys image_places
+  local old_int_trap old_term_trap
   coords_keys=$(mktemp)
   coords_map=$(mktemp)
   image_keys=$(mktemp)
   image_places=$(mktemp)
 
   # Ensure temporary files are cleaned up if interrupted
+  old_int_trap=$(trap -p INT || true)
+  old_term_trap=$(trap -p TERM || true)
   trap 'rm -f "$coords_keys" "$coords_map" "$image_keys" "$image_places"' INT TERM
 
   # Pre-geocode each unique rounded coordinate once
@@ -389,7 +393,16 @@ regenerate_all_locations() {
   done < "$image_places"
 
   rm -f "$coords_keys" "$coords_map" "$image_keys" "$image_places"
-  trap - INT TERM
+  if [ -n "$old_int_trap" ]; then
+    eval "$old_int_trap"
+  else
+    trap - INT
+  fi
+  if [ -n "$old_term_trap" ]; then
+    eval "$old_term_trap"
+  else
+    trap - TERM
+  fi
 
   echo ""
   echo "Regenerated $count locations"
@@ -626,10 +639,13 @@ infer_directory_location() {
 
   # Create temp files
   local temp_locations coords_file
+  local old_int_trap old_term_trap
   temp_locations=$(mktemp)
   coords_file=$(mktemp)
 
   # Ensure temporary files are cleaned up if interrupted
+  old_int_trap=$(trap -p INT || true)
+  old_term_trap=$(trap -p TERM || true)
   trap 'rm -f "$temp_locations" "$coords_file"' INT TERM
 
   while IFS= read -r image; do
@@ -654,11 +670,29 @@ infer_directory_location() {
   if [ -s "$temp_locations" ]; then
     sort "$temp_locations" | uniq -c | sort -rn | head -1 | awk '{$1=""; sub(/^ /, ""); print}'
     rm -f "$temp_locations" "$coords_file"
-    trap - INT TERM
+    if [ -n "$old_int_trap" ]; then
+      eval "$old_int_trap"
+    else
+      trap - INT
+    fi
+    if [ -n "$old_term_trap" ]; then
+      eval "$old_term_trap"
+    else
+      trap - TERM
+    fi
   else
     echo "Unknown"
     rm -f "$temp_locations" "$coords_file"
-    trap - INT TERM
+    if [ -n "$old_int_trap" ]; then
+      eval "$old_int_trap"
+    else
+      trap - INT
+    fi
+    if [ -n "$old_term_trap" ]; then
+      eval "$old_term_trap"
+    else
+      trap - TERM
+    fi
   fi
 }
 
