@@ -1,6 +1,6 @@
 ---
 name: image
-description: Extract metadata from image files including people names and locations
+description: Extract and update metadata from image files including people names and locations
 ---
 
 # Image Metadata Handler Skill
@@ -1006,16 +1006,13 @@ find_person "John Doe" "inputs"
 ## Best Practices
 
 1. **Always check if exiftool is installed** before running operations
-2. **Use location caching** - Location names are automatically cached in IPTC:City to avoid repeated geocoding
-3. **Respect API rate limits** - Location caching in image files reduces API calls
-4. **Sleep between API calls** - Nominatim requires 1 second between requests
-5. **Include User-Agent header** - Required by Nominatim
-6. **Cache locations in image files** - Store in IPTC:City to avoid repeated API calls
-7. **Validate coordinates** - Check lat/lon ranges before geocoding
-9. **Handle missing data gracefully** - Not all images have people names or GPS
-10. **Use directory-level inference** - Assume images in same folder are from same location
-11. **Preserve original files** - Use `-overwrite_original` flag carefully with exiftool
-12. **Regenerate location cache when needed** - Use regenerate commands if you want different granularity or locations changed
+2. **Use cache-first location lookup** - Read IPTC:City before GPS geocoding
+3. **Respect Nominatim policy** - 1 request/second with a User-Agent header
+4. **Validate coordinates** - Check lat/lon ranges before geocoding
+5. **Handle missing data gracefully** - Not all images have people names or GPS
+6. **Use directory-level inference** - Infer from nearby images when GPS is missing
+7. **Preserve original files** - Use `-overwrite_original` carefully with exiftool
+8. **Regenerate location cache when needed** - Rebuild IPTC:City if granularity or source data changes
 
 ## Workflow
 
@@ -1030,7 +1027,7 @@ When invoked with `/image`:
    - Analyze directory of images
    - Extract people names
    - Extract locations
-   - Generate captions (always dynamic, uses cached location)
+   - Generate captions (dynamic; location is cache-first)
    - Organize by location
    - Find specific person
    - **Cache management:**
@@ -1038,15 +1035,7 @@ When invoked with `/image`:
      - Regenerate location cache (if user says "regenerate locations", "recreate locations", etc.)
 
 3. **Execute operation:**
-   - **For caption generation (always dynamic):**
-     - Extract people names from XMP face regions
-     - Get location using cache-first approach:
-       1. **Check IPTC:City** in image metadata (location cache)
-       2. If not found, extract GPS and geocode using Nominatim
-       3. Cache location in IPTC:City for future use
-       4. If no GPS, infer from directory and cache in IPTC:City
-     - Build caption dynamically from people + location
-     - Return caption (NOT cached)
+   - **For caption generation:** follow the Dynamic Caption Generation Workflow above
    - **For location cache clearing:**
      - Remove IPTC:City from image metadata
    - **For location cache regeneration:**
@@ -1070,18 +1059,10 @@ When invoked with `/image`:
 
 ## Notes
 
-- **Single-level caching** (image-level only):
-  - **Location cache**: IPTC:City (in image file, fully portable)
-  - **No system cache**: All data stored in image files
-- **Captions are NOT cached** - generated dynamically from:
-  - People names (from XMP face regions)
-  - Location (from IPTC:City cache)
-- **Location caching** is stored in IPTC:City field (portable with image file)
-  - Checked BEFORE GPS geocoding to avoid API calls
-  - Compatible with Lightroom, Photos, and other photo software
-  - Automatically written when generating captions
-  - Uses smallest granularity available (village > town > city)
-  - Travels with image file - works across machines
+- **Single-level caching**: store location only in IPTC:City (no system cache)
+- **Captions are dynamic**: regenerate from current people tags plus cache-first location
+- **Location lookup order**: IPTC:City -> GPS geocoding -> directory inference
+- **Place priority**: village > town > city > suburb > county > state > country
 - **Location regeneration** is needed when:
   - You want different location granularity (city vs village)
   - Place names have changed
@@ -1091,7 +1072,5 @@ When invoked with `/image`:
   - "regenerate locations" / "recreate locations" - Clear and re-geocode all locations
 - **XMP face regions** vary by software (Microsoft Photo, Picasa, Lightroom, Apple Photos)
 - **GPS coordinates** are in EXIF format (degrees, minutes, seconds or decimal)
-- **Nominatim** is free but has rate limits (1 req/sec, appropriate User-Agent required)
-- **Directory inference** assumes photos in same folder are from same location
-- **Place name priority** (smallest first): village > town > city > suburb > county > state > country
+- **Nominatim** is free but has rate limits (1 req/sec with User-Agent required)
 - **Privacy consideration**: Be aware that location and people data may be sensitive
