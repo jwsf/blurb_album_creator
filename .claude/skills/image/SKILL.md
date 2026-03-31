@@ -1,6 +1,6 @@
 ---
 name: image
-description: Extract and update metadata from image files including people names and locations. Captions are generated dynamically from face tags and a cache-first location lookup (IPTC city, then GPS geocoding, then directory inference). The workflow writes metadata updates back to image files, including cached location values and richer location detail used by captioning.
+description: Extract and update image metadata for people names, locations, and captions.
 ---
 
 # Image Metadata Handler Skill
@@ -10,6 +10,10 @@ This skill handles extracting and processing metadata from image files, includin
 - Geographic location data
 - Reverse geocoding (coordinates to place names)
 - Location inference for images without GPS data
+
+Caption generation is dynamic and cache-first. For each image, the workflow reads people names from face tags, then resolves location in this order: IPTC city cache, GPS reverse geocoding, and finally directory-level inference when GPS is missing. Captions are rebuilt from current metadata each time rather than stored as a separate persistent caption cache.
+
+The workflow writes metadata updates back to image files when new location context is discovered. Specifically, resolved locations are cached into IPTC fields (primarily IPTC:City), and the same cached location data is reused by caption generation and reporting flows. This keeps metadata portable with the image file and avoids repeated geocoding for unchanged images.
 
 ## Required Tools
 
