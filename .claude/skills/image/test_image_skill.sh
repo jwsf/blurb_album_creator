@@ -694,6 +694,31 @@ test_skill_doc_traps_are_restored_after_temp_cleanup() {
   assert_contains "$body" 'if [ -n "$old_term_trap" ]; then' "temp cleanup snippets should restore or clear TERM trap"
 }
 
+test_skill_doc_analyze_directory_localizes_loop_vars() {
+  local fn_block
+  fn_block="$(awk '
+    /analyze_directory\(\) \{/ {in_fn=1}
+    in_fn {print}
+    in_fn && /^}/ {exit}
+  ' "$SKILL_FILE")"
+  assert_contains "$fn_block" '  local image people lat lon place date_taken' "analyze_directory should localize per-image working variables"
+}
+
+test_skill_doc_analyze_directory_reduces_metadata_overhead() {
+  local fn_block
+  fn_block="$(awk '
+    /analyze_directory\(\) \{/ {in_fn=1}
+    in_fn {print}
+    in_fn && /^}/ {exit}
+  ' "$SKILL_FILE")"
+  assert_contains "$fn_block" 'mapfile -t meta < <(exiftool -RegionName -GPSLatitude# -GPSLongitude# -DateTimeOriginal -s3 "$image" 2>/dev/null)' "analyze_directory should use one metadata read per image" || return 1
+  assert_not_contains "$fn_block" 'people=$(exiftool -RegionName -s3 "$image" 2>/dev/null)' "analyze_directory should avoid per-field people reads" || return 1
+  assert_not_contains "$fn_block" 'lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)' "analyze_directory should avoid separate latitude reads" || return 1
+  assert_not_contains "$fn_block" 'lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)' "analyze_directory should avoid separate longitude reads" || return 1
+  assert_not_contains "$fn_block" 'date_taken=$(exiftool -DateTimeOriginal -s3 "$image" 2>/dev/null)' "analyze_directory should avoid separate date reads" || return 1
+  assert_contains "$fn_block" 'if [ -z "$inferred_dir_location" ]; then' "analyze_directory should cache inferred directory location for no-GPS images"
+}
+
 main() {
   info "Using test root: $TEST_ROOT"
   if [[ "$USE_LIVE_GEOCODER" -eq 1 ]]; then
@@ -759,6 +784,8 @@ main() {
   run_test "Skill doc localizes cached-location var" test_skill_doc_read_cached_location_has_local_var
   run_test "Skill doc localizes has-cached var" test_skill_doc_has_cached_location_has_local_var
   run_test "Skill doc restores prior signal traps" test_skill_doc_traps_are_restored_after_temp_cleanup
+  run_test "Skill doc localizes analyze vars" test_skill_doc_analyze_directory_localizes_loop_vars
+  run_test "Skill doc optimizes analyze metadata" test_skill_doc_analyze_directory_reduces_metadata_overhead
 
   echo
   echo "Test summary: pass=$PASS_COUNT fail=$FAIL_COUNT skip=$SKIP_COUNT"

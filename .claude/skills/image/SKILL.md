@@ -767,6 +767,9 @@ Generate a report for all top-level images in a directory (does not scan subdire
 analyze_directory() {
   local dir="$1"
   local output_file="$2"
+  local inferred_dir_location=""
+  local image people lat lon place date_taken
+  local -a meta
 
   echo "Analyzing all images in: $dir"
   echo "Output file: $output_file"
@@ -787,22 +790,41 @@ analyze_directory() {
   while IFS= read -r image; do
     echo "Processing: $(basename "$image")"
 
+    # Read fields once per image to avoid repeated metadata calls.
+    mapfile -t meta < <(exiftool -RegionName -GPSLatitude# -GPSLongitude# -DateTimeOriginal -s3 "$image" 2>/dev/null)
+    people="${meta[0]:-}"
+    lat="${meta[1]:-}"
+    lon="${meta[2]:-}"
+    date_taken="${meta[3]:-}"
+
+    # Cache-first location resolution without re-reading metadata.
+    place=$(read_cached_location "$image")
+    if [ -z "$place" ]; then
+      if [ -n "$lat" ] && [ -n "$lon" ]; then
+        place=$(get_place_name "$lat" "$lon")
+        if [ "$place" != "Unknown" ]; then
+          write_location "$image" "$place"
+        fi
+      else
+        if [ -z "$inferred_dir_location" ]; then
+          inferred_dir_location=$(infer_directory_location "$dir")
+        fi
+        place="$inferred_dir_location"
+      fi
+    fi
+
     {
       echo "--- $(basename "$image") ---"
       echo ""
 
       # People
-      people=$(exiftool -RegionName -s3 "$image" 2>/dev/null)
       if [ -n "$people" ]; then
         echo "People: $people"
       else
         echo "People: (none)"
       fi
 
-      # Location (cache-first via get_location)
-      lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
-      lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
-      place=$(get_location "$image")
+      # Location (cache-first)
 
       if [ -n "$lat" ] && [ -n "$lon" ]; then
         echo "Location: $place (GPS: $lat, $lon)"
@@ -811,7 +833,6 @@ analyze_directory() {
       fi
 
       # Date
-      date_taken=$(exiftool -DateTimeOriginal -s3 "$image" 2>/dev/null)
       if [ -n "$date_taken" ]; then
         echo "Date: $date_taken"
       fi
