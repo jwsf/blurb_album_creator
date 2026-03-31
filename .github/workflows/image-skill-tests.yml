@@ -1,0 +1,26 @@
+name: image-skill-tests
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  test-image-skill:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install exiftool
+        run: brew install exiftool
+
+      - name: Run image skill tests
+        run: |
+          bash .claude/skills/image/test_image_skill.sh > /tmp/tout.txt 2>&1 || true
+          sed -E 's/\x1b\[[0-9;]*m//g' /tmp/tout.txt | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+          if sed -E 's/\x1b\[[0-9;]*m//g' /tmp/tout.txt | grep -q ' FAIL$'; then
+            exit 1
+          fi

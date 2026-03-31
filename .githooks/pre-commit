@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+# Check staged paths only; enforce image tests when image skill files are being committed.
+staged_paths="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+needs_image_tests=0
+if echo "$staged_paths" | grep -qE '^\.claude/skills/image/SKILL\.md$|^\.claude/skills/image/test_image_skill\.sh$'; then
+  needs_image_tests=1
+fi
+
+if [[ "$needs_image_tests" -eq 0 ]]; then
+  exit 0
+fi
+
+echo "pre-commit: detected image skill changes; running image test harness..."
+
+# Keep full output in a temp file, print required per-test lines to terminal.
+out_file="$(mktemp)"
+if bash .claude/skills/image/test_image_skill.sh >"$out_file" 2>&1; then
+  sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+  rm -f "$out_file"
+  exit 0
+fi
+
+sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+echo ""
+echo "pre-commit: image tests failed; commit blocked."
+rm -f "$out_file"
+exit 1

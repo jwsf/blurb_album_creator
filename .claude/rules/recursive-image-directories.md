@@ -49,6 +49,10 @@ The user can explicitly request non-recursive processing by saying:
 - "no subdirectories"
 - "non-recursive"
 
+## Exception: Directory-Level Location Inference
+
+`infer_directory_location()` in the image skill intentionally uses `-maxdepth 1` when scanning a single directory for GPS peers. The purpose is to find sibling images in the *same folder* as the target image — scanning subdirectories would pull in GPS from unrelated locations. This is by design and is not a violation of this rule.
+
 ## Rationale
 
 Users typically organize photos in nested folder structures (e.g., `vacation/day1`, `vacation/day2`, `events/2024/summer`) and expect operations to process all images within the hierarchy.

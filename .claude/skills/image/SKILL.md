@@ -585,28 +585,15 @@ infer_directory_location() {
       echo "$place" >> "$temp_locations"
       echo "  $(basename "$image"): $place (from GPS)"
     fi
-  done < <(find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" \))
+  done < <(find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" \) | sort)
 
   # Find most common location
   if [ -s "$temp_locations" ]; then
     common_location=$(sort "$temp_locations" | uniq -c | sort -rn | head -1 | awk '{$1=""; print substr($0,2)}')
-    echo ""
-    echo "Most common location: $common_location"
-    echo ""
-
-    # List images without GPS
-    echo "Images without GPS data (inferred location: $common_location):"
-    while IFS= read -r image; do
-      lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
-      if [ -z "$lat" ]; then
-        echo "  $(basename "$image"): $common_location (inferred)"
-      fi
-    done < <(find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" \))
 
     rm "$temp_locations"
     echo "$common_location"
   else
-    echo "No images with GPS data found in directory"
     rm "$temp_locations"
     echo "Unknown"
   fi
@@ -874,7 +861,7 @@ generate_caption() {
   local image="$1"
 
   # Get people names from XMP face regions
-  people=$(exiftool -RegionName -s3 "$image" 2>/dev/null | tr ',' '\n' | tr ';' '\n' | sed 's/^ *//' | sed 's/ *$//')
+  people=$(exiftool -RegionName -s3 "$image" 2>/dev/null | tr ',' '\n' | tr ';' '\n' | sed 's/^ *//' | sed 's/ *$//' | sed '/^$/d')
 
   # Get location using cache-first approach
   # First: Check IPTC location cache
@@ -914,7 +901,7 @@ generate_caption() {
       name2=$(echo "$people" | sed -n '2p')
       caption="$name1 and $name2"
     else
-      names=$(echo "$people" | head -n -1 | paste -sd ',' -)
+      names=$(echo "$people" | sed '$d' | paste -sd ',' -)  # sed '$d' drops last line (macOS-compatible)
       last_name=$(echo "$people" | tail -1)
       caption="$names, and $last_name"
     fi
