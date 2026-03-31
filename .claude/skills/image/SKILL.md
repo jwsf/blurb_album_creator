@@ -312,10 +312,13 @@ regenerate_location() {
     # Geocode to get place name
     place=$(get_place_name "$lat" "$lon")
 
-    # Cache the new location
-    write_location "$image" "$place"
-
-    echo "New location: $place"
+    if [ "$place" != "Unknown" ]; then
+      # Cache the new location
+      write_location "$image" "$place"
+      echo "New location: $place"
+    else
+      echo "Geocoding returned Unknown; leaving location uncached"
+    fi
   else
     echo "No GPS data found"
   fi
@@ -352,7 +355,9 @@ regenerate_all_locations() {
   while IFS=',' read -r lat lon; do
     local place
     place=$(get_place_name "$lat" "$lon")
-    printf "%s,%s\t%s\n" "$lat" "$lon" "$place" >> "$coords_map"
+    if [ "$place" != "Unknown" ]; then
+      printf "%s,%s\t%s\n" "$lat" "$lon" "$place" >> "$coords_map"
+    fi
   done < "$coords_keys"
 
   # Collect image→coordinate keys (same precision as map)
@@ -396,6 +401,7 @@ Always check IPTC location cache before geocoding:
 # Get location with cache-first approach
 get_location() {
   local image="$1"
+  local cached lat lon place
 
   # First: Check IPTC location cache
   if cached=$(read_cached_location "$image" 2>/dev/null); then
@@ -411,8 +417,10 @@ get_location() {
     # Geocode to get place name
     place=$(get_place_name "$lat" "$lon")
 
-    # Cache in image metadata for future use
-    write_location "$image" "$place"
+    # Cache in image metadata only when geocoding succeeded
+    if [ "$place" != "Unknown" ]; then
+      write_location "$image" "$place"
+    fi
 
     echo "$place"
     return 0

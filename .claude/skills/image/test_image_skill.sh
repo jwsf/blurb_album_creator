@@ -269,7 +269,9 @@ get_location() {
   lon="$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null || true)"
   if [[ -n "$lat" && -n "$lon" ]]; then
     place="$(get_place_name "$lat" "$lon")"
-    write_location "$image" "$place"
+    if [[ "$place" != "Unknown" ]]; then
+      write_location "$image" "$place"
+    fi
     echo "$place"
     return 0
   fi
@@ -367,7 +369,7 @@ find_person() {
 }
 
 setup_fixtures() {
-  mkdir -p "$TEST_ROOT/gps-city-a" "$TEST_ROOT/gps-mixed" "$TEST_ROOT/no-gps" "$TEST_ROOT/mixed" "$TEST_ROOT/nested/day1" "$TEST_ROOT/nested/day2" "$TEST_ROOT/people"
+  mkdir -p "$TEST_ROOT/gps-city-a" "$TEST_ROOT/gps-mixed" "$TEST_ROOT/no-gps" "$TEST_ROOT/mixed" "$TEST_ROOT/unknown-gps" "$TEST_ROOT/nested/day1" "$TEST_ROOT/nested/day2" "$TEST_ROOT/people"
 
   make_jpeg "$TEST_ROOT/gps-city-a/sf_1.jpg"
   make_jpeg "$TEST_ROOT/gps-city-a/sf_2.jpg"
@@ -379,6 +381,7 @@ setup_fixtures() {
   make_jpeg "$TEST_ROOT/no-gps/no_2.jpg"
   make_jpeg "$TEST_ROOT/mixed/m_1.jpg"
   make_jpeg "$TEST_ROOT/mixed/m_2.jpg"
+  make_jpeg "$TEST_ROOT/unknown-gps/u_1.jpg"
   make_jpeg "$TEST_ROOT/nested/day1/n1.jpg"
   make_jpeg "$TEST_ROOT/nested/day2/n2.jpg"
   make_png  "$TEST_ROOT/people/p_1.png"
@@ -393,6 +396,7 @@ setup_fixtures() {
   set_gps "$TEST_ROOT/gps-mixed/oak_2.jpg" 37.8044 -122.2712
 
   set_gps "$TEST_ROOT/mixed/m_1.jpg" 40.748817 -73.985428
+  set_gps "$TEST_ROOT/unknown-gps/u_1.jpg" 0.12345 0.54321
 
   set_gps "$TEST_ROOT/nested/day1/n1.jpg" 37.7749 -122.4194
   set_gps "$TEST_ROOT/nested/day2/n2.jpg" 37.7749 -122.4194
@@ -483,6 +487,18 @@ test_get_location_directory_inference() {
   calls="$(wc -l < "$GEOCODE_CALL_LOG" | tr -d ' ')"
   assert_eq "Manhattan" "$loc" "Non-GPS image should infer from folder peers" || return 1
   [[ "$calls" -ge 1 ]] || { echo "Expected at least 1 geocode call, got $calls"; return 1; }
+}
+
+test_get_location_unknown_not_cached() {
+  local img="$TEST_ROOT/unknown-gps/u_1.jpg"
+  clear_location_cache "$img"
+  local loc
+  loc="$(get_location "$img")"
+  assert_eq "Unknown" "$loc" "Unmapped GPS should return Unknown" || return 1
+  if has_cached_location "$img"; then
+    echo "Unknown must not be cached in IPTC:City"
+    return 1
+  fi
 }
 
 test_generate_caption_single_person() {
@@ -646,6 +662,7 @@ main() {
   run_test "Infer directory location majority" test_infer_directory_location_majority
   run_test "Infer directory location unknown" test_infer_directory_location_unknown
   run_test "Get location directory inference" test_get_location_directory_inference
+  run_test "Get location unknown not cached" test_get_location_unknown_not_cached
 
   run_test "Generate caption single person" test_generate_caption_single_person
   run_test "Generate caption three people" test_generate_caption_three_people
