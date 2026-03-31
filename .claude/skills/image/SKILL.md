@@ -11,11 +11,36 @@ This skill handles extracting and processing metadata from image files, includin
 - Reverse geocoding (coordinates to place names)
 - Location inference for images without GPS data
 
+## Python Implementation
+
+Use the Python helper at `.claude/skills/image/image_skill.py` for operational work. The helper is the authoritative implementation for caption generation, cache management, analysis, and CSV export.
+
+Common commands:
+
+```bash
+# Generate a caption
+python3 .claude/skills/image/image_skill.py generate-caption "image.jpg"
+
+# Resolve location with cache-first behavior
+python3 .claude/skills/image/image_skill.py get-location "image.jpg"
+
+# Analyze a single image
+python3 .claude/skills/image/image_skill.py analyze-image "image.jpg"
+
+# Export metadata to CSV
+python3 .claude/skills/image/image_skill.py export-metadata-csv inputs/ metadata.csv
+```
+
+The shell snippets below are metadata references and examples, but the preferred execution path for this skill is the Python helper.
+
 Caption generation is dynamic and cache-first. For each image, the workflow reads people names from face tags, then resolves location in this order: IPTC city cache, GPS reverse geocoding, and finally directory-level inference when GPS is missing. Captions are rebuilt from current metadata each time rather than stored as a separate persistent caption cache.
 
 The workflow writes metadata updates back to image files when new location context is discovered. Specifically, resolved locations are cached into IPTC fields (primarily IPTC:City), and the same cached location data is reused by caption generation and reporting flows. This keeps metadata portable with the image file and avoids repeated geocoding for unchanged images.
 
 ## Required Tools
+
+### Python 3
+The primary execution path for this skill runs through Python.
 
 ### exiftool
 The primary tool for reading and writing image metadata.
@@ -30,8 +55,7 @@ The primary tool for reading and writing image metadata.
 which exiftool || echo "exiftool not found - please install"
 ```
 
-### curl
-Used for reverse geocoding API calls (typically pre-installed on most systems).
+The Python helper uses the standard library for Nominatim requests, so `curl` is not required for normal skill execution.
 
 ## Supported Image Formats
 
@@ -1028,76 +1052,6 @@ echo "Caption: $caption"
 # Output: Always current based on people names and cached location
 ```
 
-### Use Case 2: Organize Photos by Location
-
-Sort photos into directories by location:
-
-```bash
-organize_by_location() {
-  local source_dir="$1"
-  local dest_dir="$2"
-  local image lat lon place place_dir safe_place
-
-  mkdir -p "$dest_dir"
-
-  while IFS= read -r image; do
-    lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
-    lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
-
-    if [ -n "$lat" ] && [ -n "$lon" ]; then
-      place=$(get_place_name "$lat" "$lon")
-    else
-      place="Unknown"
-    fi
-
-    # Create filesystem-safe location directory name
-    safe_place=$(echo "$place" | tr '/:' '-' | sed 's/[[:cntrl:]]//g' | sed 's/^ *//; s/ *$//')
-    if [ -z "$safe_place" ]; then
-      safe_place="Unknown"
-    fi
-    place_dir="$dest_dir/$safe_place"
-    mkdir -p "$place_dir"
-
-    # Copy image
-    cp "$image" "$place_dir/"
-    echo "Copied $(basename "$image") to $place/"
-  done < <(find "$source_dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \))
-}
-
-# Usage
-organize_by_location "inputs" "outputs/by_location"
-```
-
-### Use Case 3: Find All Photos of a Person
-
-Search for all photos containing a specific person:
-
-```bash
-find_person() {
-  local person_name="$1"
-  local search_dir="$2"
-  local image people
-
-  if [ -z "$person_name" ]; then
-    echo "ERROR: person_name cannot be empty" >&2
-    return 1
-  fi
-
-  echo "Searching for photos of: $person_name"
-  echo ""
-
-  while IFS= read -r image; do
-    people=$(exiftool -RegionName -s3 "$image" 2>/dev/null)
-    if echo "$people" | grep -Fqi -- "$person_name"; then
-      echo "Found: $image"
-    fi
-  done < <(find "$search_dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \))
-}
-
-# Usage
-find_person "John Doe" "inputs"
-```
-
 ## Best Practices
 
 1. **Always check if exiftool is installed** before running operations
@@ -1115,7 +1069,7 @@ When invoked with `/image`:
 
 1. **Check prerequisites:**
    - Verify exiftool is installed
-   - Verify curl is available
+  - Verify python3 is available
 
 2. **Determine user intent:**
    - Analyze single image
@@ -1123,13 +1077,12 @@ When invoked with `/image`:
    - Extract people names
    - Extract locations
    - Generate captions (dynamic; location is cache-first)
-   - Organize by location
-   - Find specific person
    - **Cache management:**
      - Clear location cache (if user says "clear location cache", "clear locations", etc.)
      - Regenerate location cache (if user says "regenerate locations", "recreate locations", etc.)
 
 3. **Execute operation:**
+  - Use `python3 .claude/skills/image/image_skill.py ...` for the requested operation
    - **For caption generation:** follow the Dynamic Caption Generation Workflow above
    - **For location cache clearing:**
      - Remove IPTC:City from image metadata
@@ -1158,6 +1111,7 @@ When invoked with `/image`:
 - **Captions are dynamic**: regenerate from current people tags plus cache-first location
 - **Location lookup order**: IPTC:City -> GPS geocoding -> directory inference
 - **Place priority**: village > town > city > suburb > county > state > country
+- **Implementation path**: prefer `.claude/skills/image/image_skill.py` over ad hoc shell pipelines
 - **Location regeneration** is needed when:
   - You want different location granularity (city vs village)
   - Place names have changed
