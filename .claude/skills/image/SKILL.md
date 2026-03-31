@@ -195,9 +195,7 @@ write_location() {
 
   exiftool -overwrite_original \
     -IPTC:City="$location" \
-    "$image"
-
-  echo "Cached location in image: $location"
+    "$image" >/dev/null
 }
 
 # Usage
@@ -333,17 +331,42 @@ regenerate_all_locations() {
   # First pass: clear all location caches
   clear_all_location_caches "$dir"
 
-  # Second pass: regenerate locations
-  count=0
+  # Build a deduplicated coordinate→place cache (avoid redundant API calls)
+  local coords_cache
+  coords_cache=$(mktemp)
+  trap 'rm -f "$coords_cache"' RETURN
+
+  # Pre-geocode each unique rounded coordinate once
   while IFS= read -r image; do
+    local lat lon
+    lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
+    lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
+    if [ -n "$lat" ] && [ -n "$lon" ]; then
+      printf "%.3f,%.3f\n" "$lat" "$lon"
+    fi
+  done < <(find "$dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \)) \
+    | sort -u \
+    | while IFS=',' read -r lat lon; do
+        local place
+        place=$(get_place_name "$lat" "$lon")
+        echo "$lat,$lon=$place"
+      done > "$coords_cache"
+
+  # Second pass: write cached place names into each image
+  local count=0
+  while IFS= read -r image; do
+    local lat lon key place
     lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
     lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
 
     if [ -n "$lat" ] && [ -n "$lon" ]; then
-      place=$(get_place_name "$lat" "$lon")
-      write_location "$image" "$place"
-      echo "  $(basename "$image"): $place"
-      ((count++))
+      key=$(printf "%.3f,%.3f" "$lat" "$lon")
+      place=$(grep "^$key=" "$coords_cache" | cut -d= -f2-)
+      if [ -n "$place" ]; then
+        write_location "$image" "$place"
+        echo "  $(basename "$image"): $place"
+        ((count++))
+      fi
     fi
   done < <(find "$dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \))
 
@@ -568,13 +591,9 @@ For images without GPS data, infer location from other images in the same direct
 infer_directory_location() {
   local dir="$1"
 
-  # Create temp file for locations
-  local temp_locations
+  # Create temp files (cleaned up on any exit from this function)
+  local temp_locations coords_file
   temp_locations=$(mktemp)
-  trap 'rm -f "$temp_locations"' RETURN
-
-  # Collect unique rounded GPS coordinates first to avoid redundant API calls
-  local coords_file
   coords_file=$(mktemp)
   trap 'rm -f "$temp_locations" "$coords_file"' RETURN
 
@@ -641,17 +660,14 @@ analyze_image() {
   echo "Location:"
   lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
   lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
+  place=$(get_location "$image")
 
   if [ -n "$lat" ] && [ -n "$lon" ]; then
     echo "  GPS: $lat, $lon"
-    place=$(get_place_name "$lat" "$lon")
     echo "  Place: $place"
   else
     echo "  (no GPS data)"
-    # Try to infer from directory
-    dir=$(dirname "$image")
-    inferred=$(infer_directory_location "$dir")
-    echo "  Inferred: $inferred"
+    echo "  Inferred: $place"
   fi
   echo ""
 
@@ -714,15 +730,15 @@ analyze_directory() {
         echo "People: (none)"
       fi
 
-      # Location
+      # Location (cache-first via get_location)
       lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
       lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
+      place=$(get_location "$image")
 
       if [ -n "$lat" ] && [ -n "$lon" ]; then
-        place=$(get_place_name "$lat" "$lon")
         echo "Location: $place (GPS: $lat, $lon)"
       else
-        echo "Location: $dir_location (inferred from directory)"
+        echo "Location: $place (inferred)"
       fi
 
       # Date
@@ -862,35 +878,13 @@ Extract people and location for photo album captions. Captions are generated dyn
 # Generate caption dynamically from people names and cached location
 generate_caption() {
   local image="$1"
+  local people place count name1 name2 names last_name caption
 
   # Get people names from XMP face regions
   people=$(exiftool -RegionName -s3 "$image" 2>/dev/null | tr ',' '\n' | tr ';' '\n' | sed 's/^ *//' | sed 's/ *$//' | sed '/^$/d')
 
   # Get location using cache-first approach
-  # First: Check IPTC location cache
-  place=$(exiftool -IPTC:City -s3 "$image" 2>/dev/null)
-
-  if [ -z "$place" ]; then
-    # Second: Get from GPS coordinates
-    lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
-    lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
-
-    if [ -n "$lat" ] && [ -n "$lon" ]; then
-      # Geocode to get place name
-      place=$(get_place_name "$lat" "$lon")
-
-      # Cache location in image metadata for future use
-      exiftool -overwrite_original -IPTC:City="$place" "$image" 2>/dev/null
-    else
-      # Third: Infer from directory
-      place=$(infer_directory_location "$(dirname "$image")")
-
-      # Cache inferred location in image metadata
-      if [ "$place" != "Unknown" ]; then
-        exiftool -overwrite_original -IPTC:City="$place" "$image" 2>/dev/null
-      fi
-    fi
-  fi
+  place=$(get_location "$image")
 
   # Build caption dynamically
   caption=""
@@ -899,7 +893,7 @@ generate_caption() {
     count=$(echo "$people" | wc -l | tr -d ' ')
     if [ "$count" = "1" ]; then
       caption="$people"
-    elif [ "$count" -eq 2 ]; then
+    elif [ "$count" = "2" ]; then
       name1=$(echo "$people" | sed -n '1p')
       name2=$(echo "$people" | sed -n '2p')
       caption="$name1 and $name2"
@@ -962,7 +956,7 @@ organize_by_location() {
     # Copy image
     cp "$image" "$place_dir/"
     echo "Copied $(basename "$image") to $place/"
-  done < <(find "$source_dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" \))
+  done < <(find "$source_dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \))
 }
 
 # Usage
@@ -986,7 +980,7 @@ find_person() {
     if echo "$people" | grep -qi "$person_name"; then
       echo "Found: $image"
     fi
-  done < <(find "$search_dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" \))
+  done < <(find "$search_dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \))
 }
 
 # Usage
