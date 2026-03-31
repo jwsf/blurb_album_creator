@@ -646,6 +646,33 @@ test_skill_doc_no_bc_dependency_in_coordinate_validation() {
   assert_contains "$body" "if awk \"BEGIN{exit !(\$lon < -180 || \$lon > 180)}\"; then" "Longitude validation should use awk"
 }
 
+test_skill_doc_inference_ignores_unknown() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_contains "$body" "if [ \"\$place\" != \"Unknown\" ]; then" "infer_directory_location should ignore Unknown geocode results in majority calculation"
+}
+
+test_skill_doc_analyze_directory_no_first_pass_inference() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_not_contains "$body" "# First pass: infer directory location" "analyze_directory should not do redundant first-pass inference"
+  assert_not_contains "$body" "dir_location=$(infer_directory_location \"\$dir\")" "analyze_directory should rely on per-image cache-first get_location"
+}
+
+test_skill_doc_reverse_geocode_sample_is_hardened() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_contains "$body" "response=\$(curl -fsS --connect-timeout 5 --max-time 20 --retry 2 --retry-delay 1" "reverse geocode sample should include hardened curl flags" || return 1
+  assert_contains "$body" "except Exception:" "reverse geocode sample should handle JSON parse failures"
+}
+
+test_skill_doc_read_cached_location_has_local_var() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_contains "$body" "read_cached_location()" "read_cached_location helper should exist" || return 1
+  assert_contains "$body" "  local location" "read_cached_location should localize location variable"
+}
+
 main() {
   info "Using test root: $TEST_ROOT"
   if [[ "$USE_LIVE_GEOCODER" -eq 1 ]]; then
@@ -705,6 +732,10 @@ main() {
   run_test "Skill doc says Unknown is not cached" test_skill_doc_unknown_never_cached_wording
   run_test "Skill doc avoids double batch sleep" test_skill_doc_no_double_sleep_in_batch_geocode
   run_test "Skill doc avoids bc dependency" test_skill_doc_no_bc_dependency_in_coordinate_validation
+  run_test "Skill doc inference ignores Unknown" test_skill_doc_inference_ignores_unknown
+  run_test "Skill doc removes first-pass inference" test_skill_doc_analyze_directory_no_first_pass_inference
+  run_test "Skill doc reverse sample is hardened" test_skill_doc_reverse_geocode_sample_is_hardened
+  run_test "Skill doc localizes cached-location var" test_skill_doc_read_cached_location_has_local_var
 
   echo
   echo "Test summary: pass=$PASS_COUNT fail=$FAIL_COUNT skip=$SKIP_COUNT"

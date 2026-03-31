@@ -208,6 +208,7 @@ write_location "photo.jpg" "San Francisco"
 # Read cached location from image
 read_cached_location() {
   local image="$1"
+  local location
 
   location=$(exiftool -IPTC:City -s3 "$image" 2>/dev/null)
 
@@ -263,7 +264,7 @@ clear_location_cache() {
 
   exiftool -overwrite_original \
     -IPTC:City= \
-    "$image"
+    "$image" >/dev/null
 
   echo "Location cache cleared: $image"
 }
@@ -477,20 +478,25 @@ https://nominatim.openstreetmap.org/reverse?format=json&lat=LAT&lon=LON&zoom=18&
 lat="40.748817"
 lon="-73.985428"
 
-response=$(curl -s "https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lon&zoom=18&addressdetails=1" \
-  -H "User-Agent: BlurbAlbumCreator/1.0")
+sleep 1
+response=$(curl -fsS --connect-timeout 5 --max-time 20 --retry 2 --retry-delay 1 \
+  "https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lon&zoom=18&addressdetails=1" \
+  -H "User-Agent: BlurbAlbumCreator/1.0" || true)
 
 # Extract address components
 echo "$response" | python3 -c "
 import sys, json
-data = json.load(sys.stdin)
-addr = data.get('address', {})
-print('Village:', addr.get('village', ''))
-print('Town:', addr.get('town', ''))
-print('City:', addr.get('city', ''))
-print('County:', addr.get('county', ''))
-print('State:', addr.get('state', ''))
-print('Country:', addr.get('country', ''))
+try:
+  data = json.load(sys.stdin)
+  addr = data.get('address', {})
+  print('Village:', addr.get('village', ''))
+  print('Town:', addr.get('town', ''))
+  print('City:', addr.get('city', ''))
+  print('County:', addr.get('county', ''))
+  print('State:', addr.get('state', ''))
+  print('Country:', addr.get('country', ''))
+except Exception:
+  print('Unable to parse geocoding response')
 "
 ```
 
@@ -639,7 +645,9 @@ infer_directory_location() {
   while IFS=',' read -r lat lon; do
     local place
     place=$(get_place_name "$lat" "$lon")
-    echo "$place" >> "$temp_locations"
+    if [ "$place" != "Unknown" ]; then
+      echo "$place" >> "$temp_locations"
+    fi
   done < "$coords_file"
 
   # Find most common location
@@ -740,13 +748,7 @@ analyze_directory() {
     echo ""
   } > "$output_file"
 
-  # First pass: infer directory location
-  echo "Determining directory location..."
-  dir_location=$(infer_directory_location "$dir")
-  echo "Directory location: $dir_location"
-  echo ""
-
-  # Second pass: analyze each image
+  # Analyze each image
   echo "Analyzing individual images..."
   while IFS= read -r image; do
     echo "Processing: $(basename "$image")"
