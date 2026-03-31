@@ -282,7 +282,7 @@ clear_all_location_caches() {
       clear_location_cache "$image"
       ((count++))
     fi
-  done < <(find "$dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" \))
+  done < <(find "$dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \))
 
   echo "Cleared $count cached locations"
 }
@@ -345,7 +345,7 @@ regenerate_all_locations() {
       echo "  $(basename "$image"): $place"
       ((count++))
     fi
-  done < <(find "$dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" \))
+  done < <(find "$dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \))
 
   echo ""
   echo "Regenerated $count locations"
@@ -487,7 +487,7 @@ try:
              addr.get('country') or
              'Unknown')
     print(place)
-except:
+except Exception:
     print('Unknown')
 ")
 
@@ -537,7 +537,7 @@ try:
         parts.append(country)
 
     print(', '.join(parts) if parts else 'Unknown')
-except:
+except Exception:
     print('Unknown')
 ")
 
@@ -568,33 +568,36 @@ For images without GPS data, infer location from other images in the same direct
 infer_directory_location() {
   local dir="$1"
 
-  echo "Analyzing images in: $dir"
-
   # Create temp file for locations
+  local temp_locations
   temp_locations=$(mktemp)
+  trap 'rm -f "$temp_locations"' RETURN
 
-  # Extract GPS from all images in directory
+  # Collect unique rounded GPS coordinates first to avoid redundant API calls
+  local coords_file
+  coords_file=$(mktemp)
+  trap 'rm -f "$temp_locations" "$coords_file"' RETURN
+
   while IFS= read -r image; do
-    # Get GPS coordinates
+    local lat lon
     lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
     lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
-
     if [ -n "$lat" ] && [ -n "$lon" ]; then
-      # Get place name
-      place=$(get_place_name "$lat" "$lon")
-      echo "$place" >> "$temp_locations"
-      echo "  $(basename "$image"): $place (from GPS)"
+      printf "%.3f,%.3f\n" "$lat" "$lon"
     fi
-  done < <(find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" \) | sort)
+  done < <(find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \) | sort) | sort -u > "$coords_file"
+
+  # Geocode each unique coordinate once
+  while IFS=',' read -r lat lon; do
+    local place
+    place=$(get_place_name "$lat" "$lon")
+    echo "$place" >> "$temp_locations"
+  done < "$coords_file"
 
   # Find most common location
   if [ -s "$temp_locations" ]; then
-    common_location=$(sort "$temp_locations" | uniq -c | sort -rn | head -1 | awk '{$1=""; print substr($0,2)}')
-
-    rm "$temp_locations"
-    echo "$common_location"
+    sort "$temp_locations" | uniq -c | sort -rn | head -1 | awk '{$1=""; sub(/^ /, ""); print}'
   else
-    rm "$temp_locations"
     echo "Unknown"
   fi
 }
@@ -730,7 +733,7 @@ analyze_directory() {
 
       echo ""
     } >> "$output_file"
-  done < <(find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" \) | sort)
+  done < <(find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \) | sort)
 
   echo ""
   echo "Analysis complete. Report saved to: $output_file"
@@ -893,8 +896,8 @@ generate_caption() {
   caption=""
   if [ -n "$people" ]; then
     # Convert to "Name1 and Name2" or "Name1, Name2, and Name3"
-    count=$(echo "$people" | wc -l)
-    if [ "$count" -eq 1 ]; then
+    count=$(echo "$people" | wc -l | tr -d ' ')
+    if [ "$count" = "1" ]; then
       caption="$people"
     elif [ "$count" -eq 2 ]; then
       name1=$(echo "$people" | sed -n '1p')
