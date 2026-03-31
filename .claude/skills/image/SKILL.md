@@ -331,10 +331,12 @@ regenerate_all_locations() {
   # First pass: clear all location caches
   clear_all_location_caches "$dir"
 
-  # Build a deduplicated coordinate→place cache (avoid redundant API calls)
-  local coords_cache
-  coords_cache=$(mktemp)
-  trap 'rm -f "$coords_cache"' RETURN
+  # Build temporary files for deduped keys and lookups
+  local coords_keys coords_map image_keys image_places
+  coords_keys=$(mktemp)
+  coords_map=$(mktemp)
+  image_keys=$(mktemp)
+  image_places=$(mktemp)
 
   # Pre-geocode each unique rounded coordinate once
   while IFS= read -r image; do
@@ -342,33 +344,40 @@ regenerate_all_locations() {
     lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
     lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
     if [ -n "$lat" ] && [ -n "$lon" ]; then
-      printf "%.3f,%.3f\n" "$lat" "$lon"
+      printf "%.5f,%.5f\n" "$lat" "$lon"
     fi
   done < <(find "$dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \)) \
-    | sort -u \
-    | while IFS=',' read -r lat lon; do
-        local place
-        place=$(get_place_name "$lat" "$lon")
-        echo "$lat,$lon=$place"
-      done > "$coords_cache"
+    | sort -u > "$coords_keys"
+
+  while IFS=',' read -r lat lon; do
+    local place
+    place=$(get_place_name "$lat" "$lon")
+    printf "%s,%s\t%s\n" "$lat" "$lon" "$place" >> "$coords_map"
+  done < "$coords_keys"
+
+  # Collect image→coordinate keys (same precision as map)
+  while IFS= read -r image; do
+    local lat lon key
+    lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
+    lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
+    if [ -n "$lat" ] && [ -n "$lon" ]; then
+      key=$(printf "%.5f,%.5f" "$lat" "$lon")
+      printf "%s\t%s\n" "$key" "$image" >> "$image_keys"
+    fi
+  done < <(find "$dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \))
+
+  # Join keys in one pass to avoid O(n^2) grep lookups
+  awk -F'\t' 'NR==FNR {place[$1]=$2; next} ($1 in place) {print $2 "\t" place[$1]}' "$coords_map" "$image_keys" > "$image_places"
 
   # Second pass: write cached place names into each image
   local count=0
-  while IFS= read -r image; do
-    local lat lon key place
-    lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
-    lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
+  while IFS=$'\t' read -r image place; do
+    write_location "$image" "$place"
+    echo "  $(basename "$image"): $place"
+    ((count++))
+  done < "$image_places"
 
-    if [ -n "$lat" ] && [ -n "$lon" ]; then
-      key=$(printf "%.3f,%.3f" "$lat" "$lon")
-      place=$(grep "^$key=" "$coords_cache" | cut -d= -f2-)
-      if [ -n "$place" ]; then
-        write_location "$image" "$place"
-        echo "  $(basename "$image"): $place"
-        ((count++))
-      fi
-    fi
-  done < <(find "$dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \))
+  rm -f "$coords_keys" "$coords_map" "$image_keys" "$image_places"
 
   echo ""
   echo "Regenerated $count locations"
@@ -491,8 +500,9 @@ get_place_name() {
   # Respect rate limit (1 request per second)
   sleep 1
 
-  response=$(curl -s "https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lon&zoom=18&addressdetails=1" \
-    -H "User-Agent: BlurbAlbumCreator/1.0")
+  response=$(curl -fsS --connect-timeout 5 --max-time 20 --retry 2 --retry-delay 1 \
+    "https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lon&zoom=18&addressdetails=1" \
+    -H "User-Agent: BlurbAlbumCreator/1.0" || true)
 
   # Extract place name with priority
   place=$(echo "$response" | python3 -c "
@@ -534,8 +544,9 @@ get_full_location() {
 
   sleep 1
 
-  response=$(curl -s "https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lon&zoom=18&addressdetails=1" \
-    -H "User-Agent: BlurbAlbumCreator/1.0")
+  response=$(curl -fsS --connect-timeout 5 --max-time 20 --retry 2 --retry-delay 1 \
+    "https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lon&zoom=18&addressdetails=1" \
+    -H "User-Agent: BlurbAlbumCreator/1.0" || true)
 
   location=$(echo "$response" | python3 -c "
 import sys, json
@@ -591,18 +602,17 @@ For images without GPS data, infer location from other images in the same direct
 infer_directory_location() {
   local dir="$1"
 
-  # Create temp files (cleaned up on any exit from this function)
+  # Create temp files
   local temp_locations coords_file
   temp_locations=$(mktemp)
   coords_file=$(mktemp)
-  trap 'rm -f "$temp_locations" "$coords_file"' RETURN
 
   while IFS= read -r image; do
     local lat lon
     lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
     lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)
     if [ -n "$lat" ] && [ -n "$lon" ]; then
-      printf "%.3f,%.3f\n" "$lat" "$lon"
+      printf "%.5f,%.5f\n" "$lat" "$lon"
     fi
   done < <(find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \) | sort) | sort -u > "$coords_file"
 
@@ -616,8 +626,10 @@ infer_directory_location() {
   # Find most common location
   if [ -s "$temp_locations" ]; then
     sort "$temp_locations" | uniq -c | sort -rn | head -1 | awk '{$1=""; sub(/^ /, ""); print}'
+    rm -f "$temp_locations" "$coords_file"
   else
     echo "Unknown"
+    rm -f "$temp_locations" "$coords_file"
   fi
 }
 
@@ -684,9 +696,9 @@ analyze_image() {
 analyze_image "photo.jpg"
 ```
 
-### Analyze All Images in Directory
+### Analyze All Images in Directory (Top-Level Only)
 
-Generate a report for all images:
+Generate a report for all top-level images in a directory (does not scan subdirectories):
 
 ```bash
 analyze_directory() {
