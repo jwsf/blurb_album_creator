@@ -711,7 +711,7 @@ test_skill_doc_analyze_directory_reduces_metadata_overhead() {
     in_fn {print}
     in_fn && /^}/ {exit}
   ' "$SKILL_FILE")"
-  assert_contains "$fn_block" 'mapfile -t meta < <(exiftool -RegionName -GPSLatitude# -GPSLongitude# -DateTimeOriginal -s3 "$image" 2>/dev/null)' "analyze_directory should use one metadata read per image" || return 1
+  assert_contains "$fn_block" 'mapfile -t meta < <(exiftool -api MissingTagValue='"'"''"'"' -RegionName -GPSLatitude# -GPSLongitude# -DateTimeOriginal -s3 "$image" 2>/dev/null)' "analyze_directory should use one metadata read per image with stable field positions" || return 1
   assert_not_contains "$fn_block" 'people=$(exiftool -RegionName -s3 "$image" 2>/dev/null)' "analyze_directory should avoid per-field people reads" || return 1
   assert_not_contains "$fn_block" 'lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)' "analyze_directory should avoid separate latitude reads" || return 1
   assert_not_contains "$fn_block" 'lon=$(exiftool -GPSLongitude -n -s3 "$image" 2>/dev/null)' "analyze_directory should avoid separate longitude reads" || return 1
@@ -747,7 +747,7 @@ test_skill_doc_organize_by_location_localizes_vars() {
     in_fn {print}
     in_fn && /^}/ {exit}
   ' "$SKILL_FILE")"
-  assert_contains "$fn_block" '  local image lat lon place place_dir' "organize_by_location should localize loop variables"
+  assert_contains "$fn_block" '  local image lat lon place place_dir safe_place' "organize_by_location should localize loop variables"
 }
 
 test_skill_doc_find_person_uses_literal_match_and_locals() {
@@ -760,6 +760,41 @@ test_skill_doc_find_person_uses_literal_match_and_locals() {
   assert_contains "$fn_block" '  local image people' "find_person should localize working variables" || return 1
   assert_contains "$fn_block" 'grep -Fqi -- "$person_name"' "find_person should use literal, case-insensitive matching" || return 1
   assert_not_contains "$fn_block" 'grep -qi "$person_name"' "find_person should not use regex matching for raw user input"
+}
+
+test_skill_doc_analyze_directory_handles_missing_metadata_fields() {
+  local fn_block
+  fn_block="$(awk '
+    /analyze_directory\(\) \{/ {in_fn=1}
+    in_fn {print}
+    in_fn && /^}/ {exit}
+  ' "$SKILL_FILE")"
+  assert_contains "$fn_block" "-api MissingTagValue=''" "analyze_directory should preserve empty metadata fields so parsed positions do not shift"
+}
+
+test_skill_doc_organize_by_location_sanitizes_directory_name() {
+  local fn_block
+  fn_block="$(awk '
+    /organize_by_location\(\) \{/ {in_fn=1}
+    in_fn {print}
+    in_fn && /^}/ {exit}
+  ' "$SKILL_FILE")"
+  assert_contains "$fn_block" 'safe_place=$(echo "$place"' "organize_by_location should sanitize place names" || return 1
+  assert_contains "$fn_block" "tr '/:' '-'" "organize_by_location should replace slash and colon in place names" || return 1
+  assert_contains "$fn_block" "sed 's/[[:cntrl:]]//g'" "organize_by_location should strip control characters" || return 1
+  assert_contains "$fn_block" "sed 's/^ *//; s/ *$//'" "organize_by_location should trim outer whitespace" || return 1
+  assert_contains "$fn_block" 'place_dir="$dest_dir/$safe_place"' "organize_by_location should use sanitized directory name"
+}
+
+test_skill_doc_find_person_rejects_empty_search() {
+  local fn_block
+  fn_block="$(awk '
+    /find_person\(\) \{/ {in_fn=1}
+    in_fn {print}
+    in_fn && /^}/ {exit}
+  ' "$SKILL_FILE")"
+  assert_contains "$fn_block" 'if [ -z "$person_name" ]; then' "find_person should guard empty person_name" || return 1
+  assert_contains "$fn_block" 'return 1' "find_person should fail on empty person_name"
 }
 
 main() {
@@ -833,6 +868,9 @@ main() {
   run_test "Skill doc localizes analyze_image vars" test_skill_doc_analyze_image_localizes_vars
   run_test "Skill doc localizes organize vars" test_skill_doc_organize_by_location_localizes_vars
   run_test "Skill doc literal find_person match" test_skill_doc_find_person_uses_literal_match_and_locals
+  run_test "Skill doc stable analyze metadata positions" test_skill_doc_analyze_directory_handles_missing_metadata_fields
+  run_test "Skill doc sanitize organize path names" test_skill_doc_organize_by_location_sanitizes_directory_name
+  run_test "Skill doc guard empty person search" test_skill_doc_find_person_rejects_empty_search
 
   echo
   echo "Test summary: pass=$PASS_COUNT fail=$FAIL_COUNT skip=$SKIP_COUNT"

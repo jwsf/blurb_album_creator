@@ -791,8 +791,8 @@ analyze_directory() {
   while IFS= read -r image; do
     echo "Processing: $(basename "$image")"
 
-    # Read fields once per image to avoid repeated metadata calls.
-    mapfile -t meta < <(exiftool -RegionName -GPSLatitude# -GPSLongitude# -DateTimeOriginal -s3 "$image" 2>/dev/null)
+    # Read fields once per image; preserve empty fields so positions stay stable.
+    mapfile -t meta < <(exiftool -api MissingTagValue='' -RegionName -GPSLatitude# -GPSLongitude# -DateTimeOriginal -s3 "$image" 2>/dev/null)
     people="${meta[0]:-}"
     lat="${meta[1]:-}"
     lon="${meta[2]:-}"
@@ -1032,7 +1032,7 @@ Sort photos into directories by location:
 organize_by_location() {
   local source_dir="$1"
   local dest_dir="$2"
-  local image lat lon place place_dir
+  local image lat lon place place_dir safe_place
 
   mkdir -p "$dest_dir"
 
@@ -1046,8 +1046,12 @@ organize_by_location() {
       place="Unknown"
     fi
 
-    # Create location directory
-    place_dir="$dest_dir/$place"
+    # Create filesystem-safe location directory name
+    safe_place=$(echo "$place" | tr '/:' '-' | sed 's/[[:cntrl:]]//g' | sed 's/^ *//; s/ *$//')
+    if [ -z "$safe_place" ]; then
+      safe_place="Unknown"
+    fi
+    place_dir="$dest_dir/$safe_place"
     mkdir -p "$place_dir"
 
     # Copy image
@@ -1069,6 +1073,11 @@ find_person() {
   local person_name="$1"
   local search_dir="$2"
   local image people
+
+  if [ -z "$person_name" ]; then
+    echo "ERROR: person_name cannot be empty" >&2
+    return 1
+  fi
 
   echo "Searching for photos of: $person_name"
   echo ""
