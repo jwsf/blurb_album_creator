@@ -12,22 +12,43 @@ if echo "$staged_paths" | grep -qE '^\.claude/skills/image/SKILL\.md$|^\.claude/
   needs_image_tests=1
 fi
 
-if [[ "$needs_image_tests" -eq 0 ]]; then
+needs_image_batcher_tests=0
+if echo "$staged_paths" | grep -qE '^\.claude/skills/image-batcher/SKILL\.md$|^\.claude/skills/image-batcher/batcher\.py$|^\.claude/skills/image-batcher/test_image_batcher\.py$|^\.claude/skills/image-batcher/test_image_batcher\.sh$'; then
+  needs_image_batcher_tests=1
+fi
+
+if [[ "$needs_image_tests" -eq 0 && "$needs_image_batcher_tests" -eq 0 ]]; then
   exit 0
 fi
 
-echo "pre-commit: detected image skill changes; running image test harness..."
-
-# Keep full output in a temp file, print required per-test lines to terminal.
-out_file="$(mktemp)"
-if python3 .claude/skills/image/test_image_skill.py >"$out_file" 2>&1; then
-  sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
-  rm -f "$out_file"
-  exit 0
+if [[ "$needs_image_tests" -eq 1 ]]; then
+  echo "pre-commit: detected image skill changes; running image test harness..."
+  out_file="$(mktemp)"
+  if python3 .claude/skills/image/test_image_skill.py >"$out_file" 2>&1; then
+    sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+    rm -f "$out_file"
+  else
+    sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+    echo ""
+    echo "pre-commit: image tests failed; commit blocked."
+    rm -f "$out_file"
+    exit 1
+  fi
 fi
 
-sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
-echo ""
-echo "pre-commit: image tests failed; commit blocked."
-rm -f "$out_file"
-exit 1
+if [[ "$needs_image_batcher_tests" -eq 1 ]]; then
+  echo "pre-commit: detected image-batcher skill changes; running image-batcher test harness..."
+  out_file="$(mktemp)"
+  if python3 .claude/skills/image-batcher/test_image_batcher.py >"$out_file" 2>&1; then
+    sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+    rm -f "$out_file"
+  else
+    sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+    echo ""
+    echo "pre-commit: image-batcher tests failed; commit blocked."
+    rm -f "$out_file"
+    exit 1
+  fi
+fi
+
+exit 0

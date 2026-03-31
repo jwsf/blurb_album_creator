@@ -5,14 +5,14 @@ description: Batch images from date-organized folders for processing in groups o
 
 # Image Batcher Skill
 
-This skill manages batching of images for album creation. When images are organized in date-prefixed folders, it creates batches respecting date and location boundaries. When no date folders are found (flat directory), it falls back to shuffling all images and splitting into random batches of 1-5.
+This skill manages batching of images for album creation. When images are organized in date-prefixed folders, it creates batches respecting date and location boundaries. When no date folders are found (flat directory), it falls back to recursive scanning, groups images by filename commonality, and splits them into batches of 1-5 while preserving order.
 
 ## New in v2.1
 
 **Flat-directory fallback:**
 - When no `YYYY-MM-DD` date folders are found, automatically falls back to flat-directory mode
-- Finds all images recursively, shuffles them randomly, and splits into batches of 1 to `max_batch_size`
-- Each batch gets a random size for layout variety
+- Finds all images recursively, groups by filename commonality, and splits into batches of 1 to `max_batch_size` while preserving order
+- Batch sizes follow the configured min/max strategy while preserving image order
 
 ## New in v2.0
 
