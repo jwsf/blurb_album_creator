@@ -719,6 +719,49 @@ test_skill_doc_analyze_directory_reduces_metadata_overhead() {
   assert_contains "$fn_block" 'if [ -z "$inferred_dir_location" ]; then' "analyze_directory should cache inferred directory location for no-GPS images"
 }
 
+test_skill_doc_analyze_directory_safe_cached_location_read() {
+  local fn_block
+  fn_block="$(awk '
+    /analyze_directory\(\) \{/ {in_fn=1}
+    in_fn {print}
+    in_fn && /^}/ {exit}
+  ' "$SKILL_FILE")"
+  assert_contains "$fn_block" 'if place=$(read_cached_location "$image" 2>/dev/null); then' "analyze_directory should safely handle cache-miss return codes" || return 1
+  assert_contains "$fn_block" '      place=""' "analyze_directory should reset place when cache is missing"
+}
+
+test_skill_doc_analyze_image_localizes_vars() {
+  local fn_block
+  fn_block="$(awk '
+    /analyze_image\(\) \{/ {in_fn=1}
+    in_fn {print}
+    in_fn && /^}/ {exit}
+  ' "$SKILL_FILE")"
+  assert_contains "$fn_block" '  local filesize people lat lon place date_taken person' "analyze_image should localize its working variables"
+}
+
+test_skill_doc_organize_by_location_localizes_vars() {
+  local fn_block
+  fn_block="$(awk '
+    /organize_by_location\(\) \{/ {in_fn=1}
+    in_fn {print}
+    in_fn && /^}/ {exit}
+  ' "$SKILL_FILE")"
+  assert_contains "$fn_block" '  local image lat lon place place_dir' "organize_by_location should localize loop variables"
+}
+
+test_skill_doc_find_person_uses_literal_match_and_locals() {
+  local fn_block
+  fn_block="$(awk '
+    /find_person\(\) \{/ {in_fn=1}
+    in_fn {print}
+    in_fn && /^}/ {exit}
+  ' "$SKILL_FILE")"
+  assert_contains "$fn_block" '  local image people' "find_person should localize working variables" || return 1
+  assert_contains "$fn_block" 'grep -Fqi -- "$person_name"' "find_person should use literal, case-insensitive matching" || return 1
+  assert_not_contains "$fn_block" 'grep -qi "$person_name"' "find_person should not use regex matching for raw user input"
+}
+
 main() {
   info "Using test root: $TEST_ROOT"
   if [[ "$USE_LIVE_GEOCODER" -eq 1 ]]; then
@@ -786,6 +829,10 @@ main() {
   run_test "Skill doc restores prior signal traps" test_skill_doc_traps_are_restored_after_temp_cleanup
   run_test "Skill doc localizes analyze vars" test_skill_doc_analyze_directory_localizes_loop_vars
   run_test "Skill doc optimizes analyze metadata" test_skill_doc_analyze_directory_reduces_metadata_overhead
+  run_test "Skill doc safe cache miss in analyze" test_skill_doc_analyze_directory_safe_cached_location_read
+  run_test "Skill doc localizes analyze_image vars" test_skill_doc_analyze_image_localizes_vars
+  run_test "Skill doc localizes organize vars" test_skill_doc_organize_by_location_localizes_vars
+  run_test "Skill doc literal find_person match" test_skill_doc_find_person_uses_literal_match_and_locals
 
   echo
   echo "Test summary: pass=$PASS_COUNT fail=$FAIL_COUNT skip=$SKIP_COUNT"

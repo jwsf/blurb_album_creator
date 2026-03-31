@@ -709,6 +709,7 @@ Get all relevant metadata from one image:
 ```bash
 analyze_image() {
   local image="$1"
+  local filesize people lat lon place date_taken person
 
   echo "=== Image Analysis: $(basename "$image") ==="
   echo ""
@@ -798,7 +799,11 @@ analyze_directory() {
     date_taken="${meta[3]:-}"
 
     # Cache-first location resolution without re-reading metadata.
-    place=$(read_cached_location "$image")
+    if place=$(read_cached_location "$image" 2>/dev/null); then
+      :
+    else
+      place=""
+    fi
     if [ -z "$place" ]; then
       if [ -n "$lat" ] && [ -n "$lon" ]; then
         place=$(get_place_name "$lat" "$lon")
@@ -1027,6 +1032,7 @@ Sort photos into directories by location:
 organize_by_location() {
   local source_dir="$1"
   local dest_dir="$2"
+  local image lat lon place place_dir
 
   mkdir -p "$dest_dir"
 
@@ -1062,13 +1068,14 @@ Search for all photos containing a specific person:
 find_person() {
   local person_name="$1"
   local search_dir="$2"
+  local image people
 
   echo "Searching for photos of: $person_name"
   echo ""
 
   while IFS= read -r image; do
     people=$(exiftool -RegionName -s3 "$image" 2>/dev/null)
-    if echo "$people" | grep -qi "$person_name"; then
+    if echo "$people" | grep -Fqi -- "$person_name"; then
       echo "Found: $image"
     fi
   done < <(find "$search_dir" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tiff" -o -iname "*.webp" \))
