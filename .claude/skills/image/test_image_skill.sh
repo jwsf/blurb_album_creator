@@ -625,6 +625,27 @@ test_skill_doc_analyze_directory_top_level_only() {
   assert_contains "$body" "does not scan subdirectories" "analyze_directory description should clarify non-recursive behavior"
 }
 
+test_skill_doc_unknown_never_cached_wording() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_contains "$body" "only when the place is not `Unknown`" "Skill doc should state Unknown values are not cached"
+}
+
+test_skill_doc_no_double_sleep_in_batch_geocode() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_contains "$body" "get_place_name()" "Skill doc should define get_place_name" || return 1
+  assert_not_contains "$body" "sleep 1  # Respect rate limit" "batch_geocode should not add an extra sleep beyond get_place_name"
+}
+
+test_skill_doc_no_bc_dependency_in_coordinate_validation() {
+  local body
+  body="$(cat "$SKILL_FILE")"
+  assert_not_contains "$body" "| bc -l" "Coordinate validation should not require bc"
+  assert_contains "$body" "if awk \"BEGIN{exit !(\$lat < -90 || \$lat > 90)}\"; then" "Latitude validation should use awk" || return 1
+  assert_contains "$body" "if awk \"BEGIN{exit !(\$lon < -180 || \$lon > 180)}\"; then" "Longitude validation should use awk"
+}
+
 main() {
   info "Using test root: $TEST_ROOT"
   if [[ "$USE_LIVE_GEOCODER" -eq 1 ]]; then
@@ -681,6 +702,9 @@ main() {
   run_test "Skill doc uses optimized cache lookup" test_skill_doc_optimized_cache_lookup_strategy
   run_test "Skill doc has curl resilience flags" test_skill_doc_curl_resilience_flags
   run_test "Skill doc marks top-level-only analysis" test_skill_doc_analyze_directory_top_level_only
+  run_test "Skill doc says Unknown is not cached" test_skill_doc_unknown_never_cached_wording
+  run_test "Skill doc avoids double batch sleep" test_skill_doc_no_double_sleep_in_batch_geocode
+  run_test "Skill doc avoids bc dependency" test_skill_doc_no_bc_dependency_in_coordinate_validation
 
   echo
   echo "Test summary: pass=$PASS_COUNT fail=$FAIL_COUNT skip=$SKIP_COUNT"

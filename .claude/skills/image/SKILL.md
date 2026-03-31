@@ -271,6 +271,7 @@ clear_location_cache() {
 # Clear cached locations from all images in directory
 clear_all_location_caches() {
   local dir="$1"
+  local count
 
   echo "Clearing location caches from all images in: $dir"
 
@@ -298,6 +299,7 @@ Force regeneration of cached locations (re-geocode):
 # Regenerate location for single image (clear and geocode again)
 regenerate_location() {
   local image="$1"
+  local lat lon place
 
   echo "Regenerating location for: $(basename "$image")"
 
@@ -341,6 +343,9 @@ regenerate_all_locations() {
   image_keys=$(mktemp)
   image_places=$(mktemp)
 
+  # Ensure temporary files are cleaned up if interrupted
+  trap 'rm -f "$coords_keys" "$coords_map" "$image_keys" "$image_places"' INT TERM
+
   # Pre-geocode each unique rounded coordinate once
   while IFS= read -r image; do
     local lat lon
@@ -383,6 +388,7 @@ regenerate_all_locations() {
   done < "$image_places"
 
   rm -f "$coords_keys" "$coords_map" "$image_keys" "$image_places"
+  trap - INT TERM
 
   echo ""
   echo "Regenerated $count locations"
@@ -504,6 +510,7 @@ When converting coordinates to a place name, use this priority order:
 get_place_name() {
   local lat="$1"
   local lon="$2"
+  local response place
 
   # Respect rate limit (1 request per second)
   sleep 1
@@ -549,6 +556,7 @@ Sometimes you may want the full location hierarchy:
 get_full_location() {
   local lat="$1"
   local lon="$2"
+  local response location
 
   sleep 1
 
@@ -615,6 +623,9 @@ infer_directory_location() {
   temp_locations=$(mktemp)
   coords_file=$(mktemp)
 
+  # Ensure temporary files are cleaned up if interrupted
+  trap 'rm -f "$temp_locations" "$coords_file"' INT TERM
+
   while IFS= read -r image; do
     local lat lon
     lat=$(exiftool -GPSLatitude -n -s3 "$image" 2>/dev/null)
@@ -635,9 +646,11 @@ infer_directory_location() {
   if [ -s "$temp_locations" ]; then
     sort "$temp_locations" | uniq -c | sort -rn | head -1 | awk '{$1=""; sub(/^ /, ""); print}'
     rm -f "$temp_locations" "$coords_file"
+    trap - INT TERM
   else
     echo "Unknown"
     rm -f "$temp_locations" "$coords_file"
+    trap - INT TERM
   fi
 }
 
@@ -814,7 +827,7 @@ exiftool -GPSLatitude=40.748817 -GPSLongitude=-73.985428 -GPSLatitudeRef=N -GPSL
 
 **How it works:**
 - When geocoding is needed, call Nominatim API directly
-- Immediately cache result in image file (IPTC:City)
+- Cache result in image file (IPTC:City) only when the place is not `Unknown`
 - Subsequent caption generation uses cached IPTC:City
 - No system cache files needed
 
@@ -829,11 +842,11 @@ exiftool -GPSLatitude=40.748817 -GPSLongitude=-73.985428 -GPSLatitudeRef=N -GPSL
 # Rate-limited batch geocoding
 batch_geocode() {
   local input_file="$1"  # CSV with lat,lon columns
+  local place
 
   while IFS=',' read -r lat lon; do
     place=$(get_place_name "$lat" "$lon")
     echo "$lat,$lon,$place"
-    sleep 1  # Respect rate limit
   done < "$input_file"
 }
 ```
@@ -858,6 +871,7 @@ check_exiftool() {
 # Robust coordinate extraction with validation
 get_coordinates_safe() {
   local image="$1"
+  local lat lon
 
   if [ ! -f "$image" ]; then
     echo "ERROR: File not found: $image" >&2
@@ -873,12 +887,12 @@ get_coordinates_safe() {
   fi
 
   # Check if coordinates are valid ranges
-  if (( $(echo "$lat < -90 || $lat > 90" | bc -l) )); then
+  if awk "BEGIN{exit !($lat < -90 || $lat > 90)}"; then
     echo "ERROR: Invalid latitude: $lat" >&2
     return 1
   fi
 
-  if (( $(echo "$lon < -180 || $lon > 180" | bc -l) )); then
+  if awk "BEGIN{exit !($lon < -180 || $lon > 180)}"; then
     echo "ERROR: Invalid longitude: $lon" >&2
     return 1
   fi
