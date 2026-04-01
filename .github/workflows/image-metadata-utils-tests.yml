@@ -1,4 +1,4 @@
-name: image-metadata-utils-tests
+name: image-skill-tests
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  test-image-metadata-utils-skill:
+  test-image-skill:
     runs-on: macos-latest
 
     steps:
