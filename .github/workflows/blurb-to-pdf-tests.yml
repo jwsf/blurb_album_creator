@@ -16,12 +16,15 @@ jobs:
 
       - name: Install PDF dependencies
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install reportlab pillow
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install reportlab pillow
 
       - name: Run blurb-to-pdf skill tests
         run: |
-          python3 .claude/skills/blurb-to-pdf/test_blurb_to_pdf_skill.py > /tmp/tout.txt 2>&1 || true
+          . .venv/bin/activate
+          python .claude/skills/blurb-to-pdf/test_blurb_to_pdf_skill.py > /tmp/tout.txt 2>&1 || true
           sed -E 's/\x1b\[[0-9;]*m//g' /tmp/tout.txt | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
           if sed -E 's/\x1b\[[0-9;]*m//g' /tmp/tout.txt | grep -q ' FAIL$'; then
             exit 1
