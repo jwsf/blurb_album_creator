@@ -1,5 +1,5 @@
 ---
-name: image
+name: image-metadata-utils
 description: Extract and update image metadata for people names, locations, and captions.
 ---
 
@@ -13,22 +13,22 @@ This skill handles extracting and processing metadata from image files, includin
 
 ## Python Implementation
 
-Use the Python helper at `.claude/skills/image/image_skill.py` for operational work. The helper is the authoritative implementation for caption generation, cache management, analysis, and CSV export.
+Use the Python helper at `.claude/skills/image-metadata-utils/image_metadata_utils.py` for operational work. The helper is the authoritative implementation for caption generation, cache management, analysis, and CSV export.
 
 Common commands:
 
 ```bash
 # Generate a caption
-python3 .claude/skills/image/image_skill.py generate-caption "image.jpg"
+python3 .claude/skills/image-metadata-utils/image_metadata_utils.py generate-caption "image.jpg"
 
 # Resolve location with cache-first behavior
-python3 .claude/skills/image/image_skill.py get-location "image.jpg"
+python3 .claude/skills/image-metadata-utils/image_metadata_utils.py get-location "image.jpg"
 
 # Analyze a single image
-python3 .claude/skills/image/image_skill.py analyze-image "image.jpg"
+python3 .claude/skills/image-metadata-utils/image_metadata_utils.py analyze-image "image.jpg"
 
 # Export metadata to CSV
-python3 .claude/skills/image/image_skill.py export-metadata-csv inputs/ metadata.csv
+python3 .claude/skills/image-metadata-utils/image_metadata_utils.py export-metadata-csv inputs/ metadata.csv
 ```
 
 The shell snippets below are metadata references and examples, but the preferred execution path for this skill is the Python helper.
@@ -1065,7 +1065,7 @@ echo "Caption: $caption"
 
 ## Workflow
 
-When invoked with `/image`:
+When invoked with `/image-metadata-utils`:
 
 1. **Check prerequisites:**
    - Verify exiftool is installed
@@ -1082,7 +1082,7 @@ When invoked with `/image`:
      - Regenerate location cache (if user says "regenerate locations", "recreate locations", etc.)
 
 3. **Execute operation:**
-  - Use `python3 .claude/skills/image/image_skill.py ...` for the requested operation
+  - Use `python3 .claude/skills/image-metadata-utils/image_metadata_utils.py ...` for the requested operation
    - **For caption generation:** follow the Dynamic Caption Generation Workflow above
    - **For location cache clearing:**
      - Remove IPTC:City from image metadata
@@ -1111,7 +1111,7 @@ When invoked with `/image`:
 - **Captions are dynamic**: regenerate from current people tags plus cache-first location
 - **Location lookup order**: IPTC:City -> GPS geocoding -> directory inference
 - **Place priority**: village > town > city > suburb > county > state > country
-- **Implementation path**: prefer `.claude/skills/image/image_skill.py` over ad hoc shell pipelines
+- **Implementation path**: prefer `.claude/skills/image-metadata-utils/image_metadata_utils.py` over ad hoc shell pipelines
 - **Location regeneration** is needed when:
   - You want different location granularity (city vs village)
   - Place names have changed

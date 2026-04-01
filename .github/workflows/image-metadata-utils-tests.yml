@@ -1,0 +1,26 @@
+name: image-metadata-utils-tests
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  test-image-metadata-utils-skill:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install exiftool
+        run: brew install exiftool
+
+      - name: Run image-metadata-utils skill tests
+        run: |
+          python3 .claude/skills/image-metadata-utils/test_image_metadata_utils.py > /tmp/tout.txt 2>&1 || true
+          sed -E 's/\x1b\[[0-9;]*m//g' /tmp/tout.txt | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+          if sed -E 's/\x1b\[[0-9;]*m//g' /tmp/tout.txt | grep -q ' FAIL$'; then
+            exit 1
+          fi

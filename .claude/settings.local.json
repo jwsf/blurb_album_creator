@@ -63,8 +63,6 @@
       "Bash(git -C /Users/jowilson/Code/blurb_album_creator add .claude/skills/image-batcher/SKILL.md .claude/skills/image-batcher/batcher.py .claude/settings.local.json)",
       "Bash(git -C /Users/jowilson/Code/blurb_album_creator commit -m \"$\\(cat <<''EOF''\nAdd flat-directory fallback to image batcher \\(v2.1\\)\n\nWhen no YYYY-MM-DD date folders are found, the batcher now falls back\nto scanning all images recursively, shuffling them, and splitting into\nrandom batches of 1 to max_batch_size. Default max_batch_size changed\nfrom 5 to 6.\n\nCo-Authored-By: Claude \\(global.anthropic.claude-opus-4-6-v1\\) <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git -C /Users/jowilson/Code/blurb_album_creator push)",
-      "Bash(git -C /Users/jowilson/Code/blurb_album_creator add .claude/rules/auto-push-changes.md)",
-      "Bash(git -C /Users/jowilson/Code/blurb_album_creator commit -m \"$\\(cat <<''EOF''\nAdd auto-push rule for skills, rules, and scripts\n\nEnsures all changes to .claude/ tracked paths are committed and pushed\nto GitHub automatically.\n\nCo-Authored-By: Claude \\(global.anthropic.claude-opus-4-6-v1\\) <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git push)",
       "Bash(git status:*)",
       "Bash(git checkout:*)",

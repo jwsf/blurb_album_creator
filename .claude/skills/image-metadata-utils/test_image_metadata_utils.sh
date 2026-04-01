@@ -2,4 +2,4 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-python3 "$SCRIPT_DIR/test_image_skill.py" "$@"
+python3 "$SCRIPT_DIR/test_image_metadata_utils.py" "$@"

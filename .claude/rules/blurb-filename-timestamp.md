@@ -29,3 +29,7 @@ outputs/My Photo Album 2026-03-08 15:30.blurb
 - Creating new .blurb files from templates
 - Regenerating .blurb files
 - Any workflow that produces a .blurb output file
+
+## Override
+
+If the user explicitly requests a specific filename without a timestamp, follow the user's requested filename.

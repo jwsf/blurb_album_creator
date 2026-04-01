@@ -36,6 +36,60 @@ When creating photo albums or processing many images, this skill helps you:
 - Optimize batch sizes (configurable preference for larger or smaller batches)
 - **Extract comprehensive metadata** (location, captions, dates, orientation) in batch for efficiency
 
+## Multi-Image Policy
+
+For album creation tasks, this skill is the default path for multi-image ingestion.
+
+### When This Skill Is Required
+
+- Adding 10+ images to a `.blurb` file
+- Adding all images from a directory
+- Adding images from multiple date folders
+- Creating a new album with many images
+- User asks to "add all photos" or "add all images"
+
+### When It Can Be Skipped
+
+- Adding 1-5 explicitly specified images
+- Adding a single image
+
+### Order Preservation (Mandatory)
+
+The batcher must never reorder photos.
+
+- Date-folder mode: preserve filename sort order within each date folder
+- Flat-directory mode: preserve recursive filename/path order
+- No shuffling, randomization, or orientation-based reordering
+
+Batching decides where to split sequences, never how to rearrange them.
+
+## Standard Album Integration Workflow
+
+Use this sequence when adding many images to an album:
+
+1. Initialize batches:
+```bash
+python3 .claude/skills/image-batcher/batcher.py init inputs/
+```
+2. Create or load target `.blurb` file
+3. Apply batches with the blurb batch script:
+```bash
+python3 .claude/skills/blurb/add_batches_to_blurb.py "outputs/Album.blurb"
+```
+4. Report batch/page summary
+
+For a canonical cross-skill orchestration (including metadata utility steps and explicit manual PDF boundary), see:
+
+- `.claude/workflows/multi-image-album.md`
+
+### Verification
+
+After processing, verify batch status:
+
+```bash
+python3 .claude/skills/image-batcher/batcher.py status
+```
+
 ## State Management
 
 The skill maintains state in `/tmp/image_batcher_state.json`:
@@ -795,13 +849,13 @@ while true; do
 done
 ```
 
-### Use with /image Skill
+### Use with /image-metadata-utils Skill
 
 ```bash
 # Get current batch
 batch_info=$(python3 .claude/skills/image-batcher/batcher.py get_batch)
 
-# Extract captions for images in current batch using /image skill
+# Extract captions for images in current batch using /image-metadata-utils skill
 # (Process only the 1-5 images in current batch)
 
 # Advance to next batch

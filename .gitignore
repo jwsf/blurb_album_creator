@@ -6,8 +6,8 @@ inputs/
 outputs/
 
 # Large sample albums (keep only templates/)
-samples/*.blurb
-samples/*.pdf
+references/*.blurb
+references/*.pdf
 
 # SQLite journal files (WAL mode)
 *.blurb-shm

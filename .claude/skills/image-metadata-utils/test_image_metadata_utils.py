@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Python test harness for the image skill."""
+"""Python test harness for the image-metadata-utils skill."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class TestHarness:
         self.fail_count = 0
         self.skip_count = 0
         self.script_dir = Path(__file__).resolve().parent
-        self.skill_script = self.script_dir / "image_skill.py"
+        self.skill_script = self.script_dir / "image_metadata_utils.py"
         self.test_root = Path(tempfile.mkdtemp())
         self.geocode_call_log = Path(tempfile.mkstemp()[1])
 
@@ -416,7 +416,7 @@ class TestHarness:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run image skill tests")
+    parser = argparse.ArgumentParser(description="Run image-metadata-utils skill tests")
     parser.add_argument("--live", action="store_true", help="Use live Nominatim geocoding")
     args = parser.parse_args(argv)
 

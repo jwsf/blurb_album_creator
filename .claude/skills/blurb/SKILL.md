@@ -115,17 +115,17 @@ These are structural requirements of the .blurb format. Removing them creates in
 
 ## Available Templates
 
-Templates are located in `samples/templates/` directory.
+Templates are located in `references/templates/` directory.
 
 **IMPORTANT**:
-- **Always list available templates dynamically** by reading from the `samples/templates/` directory
+- **Always list available templates dynamically** by reading from the `references/templates/` directory
 - Do NOT hard-code template names in the skill - always read from the directory
 - Exception: When testing or generating sample files, skip the template listing
 - When creating new .blurb files, always use one of these templates as the starting point
 - **A title MUST be specified** for every new .blurb file created
 - **An author MUST be specified** for every new .blurb file created
 - If the user doesn't specify which template to use:
-  1. List all available templates from `samples/templates/`
+  1. List all available templates from `references/templates/`
   2. Ask them to choose from the available templates
 - If the user doesn't specify a title, ask them for one
 - If the user doesn't specify an author, ask them for one
@@ -134,8 +134,8 @@ Templates are located in `samples/templates/` directory.
 
 **How to list available templates:**
 ```bash
-# Find all .blurb files in samples/templates directory
-find samples/templates -maxdepth 1 -type f -name "*.blurb" | sort
+# Find all .blurb files in references/templates directory
+find references/templates -maxdepth 1 -type f -name "*.blurb" | sort
 ```
 
 ## Source Images Directory
@@ -397,7 +397,7 @@ When this skill is invoked, support the following operations based on user inten
 - Add new pages to book
 - Update book title, author, and spine text
 - Create new .blurb files from templates
-- **Export to PDF** (convert .blurb file to PDF with embedded images and text)
+- **Export to PDF** (delegate to the `blurb-to-pdf` skill)
 - Delete files from archive
 - Search for files
 
@@ -1943,20 +1943,20 @@ The updated `/tmp/add_batches_to_blurb.py` script includes orientation-aware fea
 The orientation-aware script is maintained at `/tmp/add_batches_to_blurb.py` and integrates seamlessly with the image-batcher workflow.
 
 ### 6. Create New Archive
-Create a new .blurb file based on a template from `samples/templates/`.
+Create a new .blurb file based on a template from `references/templates/`.
 
 **REQUIRED: Title and Author must be specified**
 Every new .blurb file MUST have a title and author. If not provided by the user, ask for them.
 
-**Default template:** `samples/templates/2020 empty photo album.blurb`
+**Default template:** `references/templates/2020 empty photo album.blurb`
 - This is the preferred template — use it automatically unless the user specifies a different one.
 - It has 186 pages, 494 image containers (1-9 per page), and the widest variety of layouts.
 
 **If user explicitly asks to choose a template**, list available templates and ask:
 1. First, list all available templates from the directory:
 ```bash
-# Find all .blurb files in samples/templates
-find samples/templates -maxdepth 1 -type f -name "*.blurb" -exec basename {} \; | sort
+# Find all .blurb files in references/templates
+find references/templates -maxdepth 1 -type f -name "*.blurb" -exec basename {} \; | sort
 ```
 2. Present the list to the user
 3. Use the AskUserQuestion tool to prompt for template selection with the dynamically discovered options
@@ -1976,7 +1976,7 @@ Ask for the book author - this will be used in:
 mkdir -p outputs
 
 # Copy the chosen template to outputs directory (unless user specified a different path)
-cp "samples/templates/2020 empty photo album.blurb" "outputs/new_file.blurb"
+cp "references/templates/2020 empty photo album.blurb" "outputs/new_file.blurb"
 
 # Extract bbf2.xml to modify title, author, and spine text
 sqlite3 "outputs/new_file.blurb" "SELECT filecontent FROM Files WHERE filepath='bbf2.xml';" > /tmp/bbf2_temp.xml
@@ -2045,7 +2045,7 @@ sqlite3 "path/to/file.blurb" "SELECT filepath, filesize FROM Files WHERE filepat
 ```
 
 ### 9. Export to PDF
-Convert a .blurb file to PDF format with all images and text embedded.
+Delegate PDF conversion to the separate `blurb-to-pdf` skill.
 
 **⚠️ IMPORTANT: Conversion Time**
 - PDF conversion can take **several minutes** for large albums
@@ -2068,7 +2068,7 @@ Convert a .blurb file to PDF format with all images and text embedded.
 **Process:**
 ```bash
 # Convert .blurb file to PDF
-python3 .claude/skills/blurb/blurb_to_pdf.py "path/to/file.blurb"
+python3 .claude/skills/blurb-to-pdf/blurb_to_pdf.py "path/to/file.blurb"
 
 # Output will be created at: path/to/file.pdf (same directory and name)
 ```
@@ -2117,7 +2117,7 @@ python3 .claude/skills/blurb/blurb_to_pdf.py "path/to/file.blurb"
 **Example Output:**
 ```bash
 # Convert photo album to PDF
-python3 .claude/skills/blurb/blurb_to_pdf.py "outputs/My Photo Album.blurb"
+python3 .claude/skills/blurb-to-pdf/blurb_to_pdf.py "outputs/My Photo Album.blurb"
 
 # Output:
 # Converting: My Photo Album.blurb
@@ -2414,7 +2414,7 @@ This handles albums where the section element uses `name=None` instead of `name=
 
 ### Inspect a .blurb file
 ```bash
-sqlite3 "samples/2020 Photo Album.blurb" "
+sqlite3 "references/2020 Photo Album.blurb" "
 SELECT 'Archive Version: ' || version FROM ArchiveVersion;
 SELECT 'Total Files: ' || COUNT(*) FROM Files;
 SELECT 'Total Size: ' || SUM(filesize) || ' bytes' FROM Files WHERE filesize > 0;
@@ -2478,7 +2478,7 @@ sqlite3 "path/to/file.blurb" "SELECT filecontent FROM Files WHERE filepath='proj
 ### Example 1: Quick inspection
 ```bash
 echo "=== Blurb File Info ==="
-sqlite3 "samples/templates/2020 empty photo album.blurb" "
+sqlite3 "references/templates/2020 empty photo album.blurb" "
 SELECT 'Version: ' || version FROM ArchiveVersion;
 SELECT '';
 SELECT 'Files in archive:';
@@ -2606,7 +2606,7 @@ BOOK_AUTHOR="Jane Smith"
 mkdir -p outputs
 
 # Copy template to start a new project (keeps all template content)
-cp "samples/templates/2020 empty photo album.blurb" "outputs/My New Album.blurb"
+cp "references/templates/2020 empty photo album.blurb" "outputs/My New Album.blurb"
 
 # Extract bbf2.xml
 sqlite3 "outputs/My New Album.blurb" "SELECT filecontent FROM Files WHERE filepath='bbf2.xml';" > /tmp/bbf2_temp.xml
@@ -2645,7 +2645,7 @@ BOOK_AUTHOR="Test Author"
 mkdir -p outputs inputs
 
 # Copy template
-cp "samples/templates/2020 empty photo album.blurb" "outputs/Sample Album.blurb"
+cp "references/templates/2020 empty photo album.blurb" "outputs/Sample Album.blurb"
 
 # Extract bbf2.xml and set title/author
 sqlite3 "outputs/Sample Album.blurb" "SELECT filecontent FROM Files WHERE filepath='bbf2.xml';" > /tmp/bbf2_temp.xml
@@ -2771,9 +2771,9 @@ When invoked with `/blurb` or when user mentions "photo album", "album", or "boo
    - If author not specified, ask user for the book author
    - Check if template is specified
    - If not specified:
-     - **List all available templates** from `samples/templates/` directory using:
+     - **List all available templates** from `references/templates/` directory using:
        ```bash
-       find samples/templates -maxdepth 1 -type f -name "*.blurb" -exec basename {} \; | sort
+       find references/templates -maxdepth 1 -type f -name "*.blurb" -exec basename {} \; | sort
        ```
      - Present the list to the user
      - Use AskUserQuestion to let user choose from available templates

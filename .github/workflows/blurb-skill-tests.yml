@@ -1,4 +1,4 @@
-name: image-skill-tests
+name: blurb-skill-tests
 
 on:
   pull_request:
@@ -7,19 +7,16 @@ on:
     branches: [ main ]
 
 jobs:
-  test-image-skill:
+  test-blurb-skill:
     runs-on: macos-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install exiftool
-        run: brew install exiftool
-
-      - name: Run image skill tests
+      - name: Run blurb skill tests
         run: |
-          python3 .claude/skills/image/test_image_skill.py > /tmp/tout.txt 2>&1 || true
+          python3 .claude/skills/blurb/test_blurb_skill.py > /tmp/tout.txt 2>&1 || true
           sed -E 's/\x1b\[[0-9;]*m//g' /tmp/tout.txt | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
           if sed -E 's/\x1b\[[0-9;]*m//g' /tmp/tout.txt | grep -q ' FAIL$'; then
             exit 1

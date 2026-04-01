@@ -52,6 +52,8 @@ Notes
 import gc
 import os
 import sys
+import hashlib
+import tempfile
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -76,6 +78,33 @@ _image_temp_cache = {}
 
 # Whether fonts have been registered
 _fonts_registered = False
+
+
+def _sql_quote(value):
+    """Escape a Python string as a SQLite single-quoted literal."""
+    return str(value).replace("'", "''")
+
+
+def _temp_image_path(image_path):
+    """Create a collision-resistant temp image path for archive extraction."""
+    suffix = Path(image_path).suffix or ".img"
+    digest = hashlib.sha1(image_path.encode("utf-8")).hexdigest()[:16]
+    return f"/tmp/blurb_img_{os.getpid()}_{digest}{suffix}"
+
+
+def _cleanup_temp_files(xml_file=None):
+    """Best-effort cleanup for temporary XML and extracted image files."""
+    if xml_file and os.path.exists(xml_file):
+        try:
+            os.remove(xml_file)
+        except OSError:
+            pass
+    for temp_path in _image_temp_cache.values():
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+    _image_temp_cache.clear()
 
 def register_fonts():
     """Register Arial TTF fonts from macOS system fonts, with Helvetica fallback."""
@@ -150,10 +179,12 @@ def preextract_all_images(blurb_file, image_paths):
         if image_path in _image_temp_cache:
             continue
 
-        temp_path = f"/tmp/blurb_img_{os.path.basename(image_path)}"
+        temp_path = _temp_image_path(image_path)
+        sql_image = _sql_quote(image_path)
+        sql_temp = _sql_quote(temp_path)
 
         result = subprocess.run(
-            ['sqlite3', blurb_file, f"SELECT writefile('{temp_path}', filecontent) FROM Files WHERE filepath='{image_path}';"],
+            ['sqlite3', blurb_file, f"SELECT writefile('{sql_temp}', filecontent) FROM Files WHERE filepath='{sql_image}';"],
             capture_output=True,
             text=True
         )
@@ -169,10 +200,11 @@ def preextract_all_images(blurb_file, image_paths):
 
 def extract_bbf2_xml(blurb_file):
     """Extract bbf2.xml from .blurb file."""
-    # Use a unique temp path based on PID to avoid collisions when running in parallel
-    temp_path = f'/tmp/bbf2_pdf_{os.getpid()}.xml'
+    handle, temp_path = tempfile.mkstemp(prefix=f"bbf2_pdf_{os.getpid()}_", suffix=".xml")
+    os.close(handle)
+    sql_temp = _sql_quote(temp_path)
     subprocess.run(
-        ['sqlite3', blurb_file, f"SELECT writefile('{temp_path}', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
+        ['sqlite3', blurb_file, f"SELECT writefile('{sql_temp}', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
         capture_output=True,
         text=True,
         check=True
@@ -189,10 +221,12 @@ def extract_image_from_archive(blurb_file, image_path):
         return _image_temp_cache[image_path]
 
     # Fallback to direct extraction if not in cache
-    temp_path = f"/tmp/blurb_img_{os.path.basename(image_path)}"
+    temp_path = _temp_image_path(image_path)
+    sql_image = _sql_quote(image_path)
+    sql_temp = _sql_quote(temp_path)
 
     result = subprocess.run(
-        ['sqlite3', blurb_file, f"SELECT writefile('{temp_path}', filecontent) FROM Files WHERE filepath='{image_path}';"],
+        ['sqlite3', blurb_file, f"SELECT writefile('{sql_temp}', filecontent) FROM Files WHERE filepath='{sql_image}';"],
         capture_output=True,
         text=True
     )
@@ -204,9 +238,10 @@ def extract_image_from_archive(blurb_file, image_path):
 
 def extract_image_bytes_from_archive(blurb_file, image_path):
     """Extract an image from the .blurb archive as bytes (in-memory, no temp file)."""
+    sql_image = _sql_quote(image_path)
     # Use hex() to get binary data as hex, then convert back to bytes
     result = subprocess.run(
-        ['sqlite3', blurb_file, f"SELECT hex(filecontent) FROM Files WHERE filepath='{image_path}';"],
+        ['sqlite3', blurb_file, f"SELECT hex(filecontent) FROM Files WHERE filepath='{sql_image}';"],
         capture_output=True,
         text=True
     )
@@ -447,237 +482,235 @@ def convert_blurb_to_pdf(blurb_file):
 
     # Generate PDF filename
     pdf_file = str(Path(blurb_file).with_suffix('.pdf'))
+    xml_file = None
 
-    # Register fonts before any canvas operations
-    register_fonts()
+    try:
+        # Register fonts before any canvas operations
+        register_fonts()
 
-    print(f"Converting: {os.path.basename(blurb_file)}")
-    print(f"Output: {os.path.basename(pdf_file)}")
-    print()
+        print(f"Converting: {os.path.basename(blurb_file)}")
+        print(f"Output: {os.path.basename(pdf_file)}")
+        print()
 
-    # Extract bbf2.xml
-    print("Extracting book structure...")
-    xml_file = extract_bbf2_xml(blurb_file)
+        # Extract bbf2.xml
+        print("Extracting book structure...")
+        xml_file = extract_bbf2_xml(blurb_file)
 
-    # Parse XML
-    tree = ET.parse(xml_file)
-    root = tree.getroot()
+        # Parse XML
+        tree = ET.parse(xml_file)
+        root = tree.getroot()
 
-    # Get book info
-    info = root.find('.//info')
-    title = ""
-    author = ""
-    if info is not None:
-        title_elem = info.find('title')
-        author_elem = info.find('author')
-        if title_elem is not None and title_elem.text:
-            title = title_elem.text.strip()
-            if title.startswith('<![CDATA['):
-                title = title[9:-3]
-        if author_elem is not None and author_elem.text:
-            author = author_elem.text.strip()
-            if author.startswith('<![CDATA['):
-                author = author[9:-3]
+        # Get book info
+        info = root.find('.//info')
+        title = ""
+        author = ""
+        if info is not None:
+            title_elem = info.find('title')
+            author_elem = info.find('author')
+            if title_elem is not None and title_elem.text:
+                title = title_elem.text.strip()
+                if title.startswith('<![CDATA['):
+                    title = title[9:-3]
+            if author_elem is not None and author_elem.text:
+                author = author_elem.text.strip()
+                if author.startswith('<![CDATA['):
+                    author = author[9:-3]
 
-    print(f"Title: {title}")
-    print(f"Author: {author}")
-    print()
+        print(f"Title: {title}")
+        print(f"Author: {author}")
+        print()
 
-    # Get page dimensions from book element
-    # The root element IS the book element and contains width/height attributes in points
-    book_elem = root
+        # Get page dimensions from book element
+        # The root element IS the book element and contains width/height attributes in points
+        book_elem = root
 
-    # Try to get dimensions from book element attributes
-    width_str = book_elem.get('width')
-    height_str = book_elem.get('height')
+        # Try to get dimensions from book element attributes
+        width_str = book_elem.get('width')
+        height_str = book_elem.get('height')
 
-    if width_str and height_str:
-        try:
-            page_width = float(width_str)
-            page_height = float(height_str)
-            print(f"Page size: {page_width/inch:.2f}\" × {page_height/inch:.2f}\" ({page_width:.0f} × {page_height:.0f} points)")
-        except (ValueError, TypeError) as e:
-            print(f"Warning: Could not parse dimensions from book element: {e}")
-            print(f"  width='{width_str}', height='{height_str}'")
+        if width_str and height_str:
+            try:
+                page_width = float(width_str)
+                page_height = float(height_str)
+                print(f"Page size: {page_width/inch:.2f}\" × {page_height/inch:.2f}\" ({page_width:.0f} × {page_height:.0f} points)")
+            except (ValueError, TypeError) as e:
+                print(f"Warning: Could not parse dimensions from book element: {e}")
+                print(f"  width='{width_str}', height='{height_str}'")
+                print("Using default 8\" × 8\" page size")
+                page_width = 8 * inch
+                page_height = 8 * inch
+        else:
+            print("Warning: No width/height attributes found on book element")
             print("Using default 8\" × 8\" page size")
             page_width = 8 * inch
             page_height = 8 * inch
-    else:
-        print("Warning: No width/height attributes found on book element")
-        print("Using default 8\" × 8\" page size")
-        page_width = 8 * inch
-        page_height = 8 * inch
 
-    print(f"Aspect ratio: {page_width/page_height:.3f}:1")
-    print()
+        print(f"Aspect ratio: {page_width/page_height:.3f}:1")
+        print()
 
-    # Get the content section and covers for later use
-    # Try to find section with name="" first (standard format)
-    section = root.find('.//section[@name=""]')
+        # Get the content section and covers for later use
+        # Try to find section with name="" first (standard format)
+        section = root.find('.//section[@name=""]')
 
-    # Fallback: If not found, look for ANY section element
-    # Some albums have section without name attribute or with name=None
-    if section is None:
-        section = root.find('.//section')
+        # Fallback: If not found, look for ANY section element
+        # Some albums have section without name attribute or with name=None
+        if section is None:
+            section = root.find('.//section')
 
-    masterpage = root.find('.//masterpage')
+        masterpage = root.find('.//masterpage')
 
-    # Find the first available cover type and store front/back for later
-    front_cover = None
-    back_cover = None
-    cover_type_name = None
+        # Find the first available cover type and store front/back for later
+        front_cover = None
+        back_cover = None
+        cover_type_name = None
 
-    for cover_type in ['softcover', 'imagewrap', 'dustjacket']:
-        cover = root.find(f'.//cover[@type="{cover_type}"]')
-        if cover is not None:
-            # Check for separate front/back elements first
-            front_cover = cover.find('front')
-            back_cover = cover.find('back')
+        for cover_type in ['softcover', 'imagewrap', 'dustjacket']:
+            cover = root.find(f'.//cover[@type="{cover_type}"]')
+            if cover is not None:
+                # Check for separate front/back elements first
+                front_cover = cover.find('front')
+                back_cover = cover.find('back')
 
-            # If no separate elements, check for coversheet format
-            if front_cover is None and back_cover is None:
+                # If no separate elements, check for coversheet format
+                if front_cover is None and back_cover is None:
+                    coversheet = cover.find('coversheet')
+                    if coversheet is not None:
+                        # Split coversheet into front and back covers
+                        front_cover, back_cover = split_coversheet(coversheet, page_width, page_height)
+
+                # Only set cover_type_name if we found at least one cover
+                if front_cover is not None or back_cover is not None:
+                    cover_type_name = cover_type
+                    break
+
+        # Fallback: If no covers found with standard types, look for ANY cover element
+        # Some albums use type="None" instead of specific cover types
+        if front_cover is None and back_cover is None:
+            covers = root.findall('.//cover')
+            for cover in covers:
+                # Check for coversheet format
                 coversheet = cover.find('coversheet')
                 if coversheet is not None:
                     # Split coversheet into front and back covers
                     front_cover, back_cover = split_coversheet(coversheet, page_width, page_height)
+                    cover_type_name = cover.get('type', 'unknown')
+                    break
 
-            # Only set cover_type_name if we found at least one cover
-            if front_cover is not None or back_cover is not None:
-                cover_type_name = cover_type
-                break
+                # Check for separate front/back elements
+                front = cover.find('front')
+                back = cover.find('back')
+                if front is not None or back is not None:
+                    front_cover = front
+                    back_cover = back
+                    cover_type_name = cover.get('type', 'unknown')
+                    break
 
-    # Fallback: If no covers found with standard types, look for ANY cover element
-    # Some albums use type="None" instead of specific cover types
-    if front_cover is None and back_cover is None:
-        covers = root.findall('.//cover')
-        for cover in covers:
-            # Check for coversheet format
-            coversheet = cover.find('coversheet')
-            if coversheet is not None:
-                # Split coversheet into front and back covers
-                front_cover, back_cover = split_coversheet(coversheet, page_width, page_height)
-                cover_type_name = cover.get('type', 'unknown')
-                break
+        # Calculate total pages to show progress (excluding inside covers)
+        total_pages = 0
+        if front_cover is not None:
+            total_pages += 1
+        # Skip masterpage (inside covers) - not included in PDF
+        if section is not None:
+            total_pages += len(section.findall('page'))
+        if back_cover is not None:
+            total_pages += 1
 
-            # Check for separate front/back elements
-            front = cover.find('front')
-            back = cover.find('back')
-            if front is not None or back is not None:
-                front_cover = front
-                back_cover = back
-                cover_type_name = cover.get('type', 'unknown')
-                break
+        # Show time estimate
+        print(f"Total pages to process: {total_pages}")
+        if total_pages > 50:
+            print("⚠️  Large album detected: PDF conversion may take several minutes")
+            print(f"   Estimated time: {total_pages * 2} - {total_pages * 4} seconds")
+        elif total_pages > 20:
+            print("⏱  PDF conversion may take 1-2 minutes")
+        print()
 
-    # Calculate total pages to show progress (excluding inside covers)
-    total_pages = 0
-    if front_cover is not None:
-        total_pages += 1
-    # Skip masterpage (inside covers) - not included in PDF
-    if section is not None:
-        total_pages += len(section.findall('page'))
-    if back_cover is not None:
-        total_pages += 1
+        # Phase 2 optimization: Pre-extract all images to avoid repeated SQLite queries
+        print("Phase 2 optimization: Pre-extracting images...")
+        all_image_paths = set()
+        for img_elem in root.findall('.//image[@src]'):
+            src = img_elem.get('src')
+            if src:
+                # Build full path in archive
+                if not src.startswith('images/'):
+                    src = f"images/{src}"
+                all_image_paths.add(src)
 
-    # Show time estimate
-    print(f"Total pages to process: {total_pages}")
-    if total_pages > 50:
-        print("⚠️  Large album detected: PDF conversion may take several minutes")
-        print(f"   Estimated time: {total_pages * 2} - {total_pages * 4} seconds")
-    elif total_pages > 20:
-        print("⏱  PDF conversion may take 1-2 minutes")
-    print()
+        if all_image_paths:
+            preextract_all_images(blurb_file, sorted(all_image_paths))
+        print()
 
-    # Phase 2 optimization: Pre-extract all images to avoid repeated SQLite queries
-    print("Phase 2 optimization: Pre-extracting images...")
-    all_image_paths = set()
-    for img_elem in root.findall('.//image[@src]'):
-        src = img_elem.get('src')
-        if src:
-            # Build full path in archive
-            if not src.startswith('images/'):
-                src = f"images/{src}"
-            all_image_paths.add(src)
+        # Create PDF
+        c = canvas.Canvas(pdf_file, pagesize=(page_width, page_height))
+        c.setTitle(title)
+        c.setAuthor(author)
 
-    if all_image_paths:
-        preextract_all_images(blurb_file, sorted(all_image_paths))
-    print()
+        page_count = 0
+        import time
+        start_time = time.time()
 
-    # Create PDF
-    c = canvas.Canvas(pdf_file, pagesize=(page_width, page_height))
-    c.setTitle(title)
-    c.setAuthor(author)
-
-    page_count = 0
-    import time
-    start_time = time.time()
-
-    # Process front cover as FIRST page of PDF
-    if front_cover is not None:
-        page_count += 1
-        print(f"[{page_count}/{total_pages}] Processing front cover ({cover_type_name})...")
-        process_page(c, front_cover, blurb_file, page_width, page_height, f"Front Cover ({cover_type_name})")
-        c.showPage()
-
-    # Skip inside covers (masterpage) - not included in PDF
-
-    # Process content pages
-    if section is not None:
-        pages = sorted(section.findall('page'), key=lambda p: int(p.get('number', 0)))
-        print(f"\nProcessing {len(pages)} content pages...")
-        for page in pages:
-            page_num = page.get('number')
+        # Process front cover as FIRST page of PDF
+        if front_cover is not None:
             page_count += 1
-
-            # Show progress every 10 pages for large albums, or every page for small albums
-            if total_pages > 50:
-                if page_count % 10 == 0:
-                    elapsed = time.time() - start_time
-                    rate = page_count / elapsed if elapsed > 0 else 0
-                    remaining = (total_pages - page_count) / rate if rate > 0 else 0
-                    print(f"[{page_count}/{total_pages}] Page {page_num} ({page_count * 100 // total_pages}% complete, ~{int(remaining)}s remaining)")
-            else:
-                print(f"[{page_count}/{total_pages}] Page {page_num}")
-
-            process_page(c, page, blurb_file, page_width, page_height, f"Page {page_num}")
+            print(f"[{page_count}/{total_pages}] Processing front cover ({cover_type_name})...")
+            process_page(c, front_cover, blurb_file, page_width, page_height, f"Front Cover ({cover_type_name})")
             c.showPage()
 
+        # Skip inside covers (masterpage) - not included in PDF
+
+        # Process content pages
+        if section is not None:
+            pages = sorted(section.findall('page'), key=lambda p: int(p.get('number', 0)))
+            print(f"\nProcessing {len(pages)} content pages...")
+            for page in pages:
+                page_num = page.get('number')
+                page_count += 1
+
+            # Show progress every 10 pages for large albums, or every page for small albums
+                if total_pages > 50:
+                    if page_count % 10 == 0:
+                        elapsed = time.time() - start_time
+                        rate = page_count / elapsed if elapsed > 0 else 0
+                        remaining = (total_pages - page_count) / rate if rate > 0 else 0
+                        print(f"[{page_count}/{total_pages}] Page {page_num} ({page_count * 100 // total_pages}% complete, ~{int(remaining)}s remaining)")
+                else:
+                    print(f"[{page_count}/{total_pages}] Page {page_num}")
+
+                process_page(c, page, blurb_file, page_width, page_height, f"Page {page_num}")
+                c.showPage()
+
             # Periodically force garbage collection to reclaim image memory
-            if page_count % 10 == 0:
-                gc.collect()
+                if page_count % 10 == 0:
+                    gc.collect()
 
-    # Process back cover as LAST page of PDF
-    if back_cover is not None:
-        page_count += 1
-        print(f"\n[{page_count}/{total_pages}] Processing back cover ({cover_type_name})...")
-        process_page(c, back_cover, blurb_file, page_width, page_height, f"Back Cover ({cover_type_name})")
-        c.showPage()
+        # Process back cover as LAST page of PDF
+        if back_cover is not None:
+            page_count += 1
+            print(f"\n[{page_count}/{total_pages}] Processing back cover ({cover_type_name})...")
+            process_page(c, back_cover, blurb_file, page_width, page_height, f"Back Cover ({cover_type_name})")
+            c.showPage()
 
-    # Save PDF
-    print(f"\n[{total_pages}/{total_pages}] Saving PDF...")
-    c.save()
+        # Save PDF
+        print(f"\n[{total_pages}/{total_pages}] Saving PDF...")
+        c.save()
 
-    elapsed_time = time.time() - start_time
-    elapsed_mins = int(elapsed_time // 60)
-    elapsed_secs = int(elapsed_time % 60)
+        elapsed_time = time.time() - start_time
+        elapsed_mins = int(elapsed_time // 60)
+        elapsed_secs = int(elapsed_time % 60)
 
-    print()
-    print(f"✅ Created PDF with {page_count} pages")
-    print(f"   Output: {pdf_file}")
-    if elapsed_mins > 0:
-        print(f"   Time elapsed: {elapsed_mins}m {elapsed_secs}s")
-    else:
-        print(f"   Time elapsed: {elapsed_secs}s")
+        print()
+        print(f"✅ Created PDF with {page_count} pages")
+        print(f"   Output: {pdf_file}")
+        if elapsed_mins > 0:
+            print(f"   Time elapsed: {elapsed_mins}m {elapsed_secs}s")
+        else:
+            print(f"   Time elapsed: {elapsed_secs}s")
 
-    # Cleanup temp files
-    os.remove(xml_file)
-    for temp_path in _image_temp_cache.values():
-        try:
-            os.remove(temp_path)
-        except OSError:
-            pass
-    _image_temp_cache.clear()
-
-    return True
+        return True
+    except Exception as exc:
+        print(f"ERROR: Failed to convert .blurb to PDF: {exc}")
+        return False
+    finally:
+        _cleanup_temp_files(xml_file)
 
 def process_page(c, page_elem, blurb_file, page_width, page_height, page_label):
     """Process a single page and add to PDF."""

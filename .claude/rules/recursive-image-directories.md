@@ -11,7 +11,7 @@ When the user references a folder or directory for image operations, **ALWAYS pr
 - Photo organization
 - Location analysis
 - People name extraction
-- Any batch image processing operations
+- Generic directory-wide batch operations
 
 ## Default Behavior
 
@@ -52,6 +52,15 @@ The user can explicitly request non-recursive processing by saying:
 ## Exception: Directory-Level Location Inference
 
 `infer_directory_location()` in the image skill intentionally uses `-maxdepth 1` when scanning a single directory for GPS peers. The purpose is to find sibling images in the *same folder* as the target image — scanning subdirectories would pull in GPS from unrelated locations. This is by design and is not a violation of this rule.
+
+## Exception: Image Batcher Mode Semantics
+
+`/image-batcher` has mode-specific scanning behavior that is intentionally different from this generic recursion rule:
+
+- Date-folder mode: scans immediate date folders and images within each date folder.
+- Flat-directory fallback: scans recursively when no date folders are present.
+
+For `/image-batcher`, follow its own documented behavior in `.claude/skills/image-batcher/SKILL.md`.
 
 ## Rationale
 

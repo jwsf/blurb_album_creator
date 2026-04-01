@@ -8,7 +8,7 @@ cd "$repo_root"
 staged_paths="$(git diff --cached --name-only --diff-filter=ACMR)"
 
 needs_image_tests=0
-if echo "$staged_paths" | grep -qE '^\.claude/skills/image/SKILL\.md$|^\.claude/skills/image/test_image_skill\.sh$|^\.claude/skills/image/test_image_skill\.py$|^\.claude/skills/image/image_skill\.py$'; then
+if echo "$staged_paths" | grep -qE '^\.claude/skills/image-metadata-utils/SKILL\.md$|^\.claude/skills/image-metadata-utils/test_image_metadata_utils\.sh$|^\.claude/skills/image-metadata-utils/test_image_metadata_utils\.py$|^\.claude/skills/image-metadata-utils/image_metadata_utils\.py$'; then
   needs_image_tests=1
 fi
 
@@ -17,14 +17,24 @@ if echo "$staged_paths" | grep -qE '^\.claude/skills/image-batcher/SKILL\.md$|^\
   needs_image_batcher_tests=1
 fi
 
-if [[ "$needs_image_tests" -eq 0 && "$needs_image_batcher_tests" -eq 0 ]]; then
+needs_blurb_tests=0
+if echo "$staged_paths" | grep -qE '^\.claude/skills/blurb/SKILL\.md$|^\.claude/skills/blurb/add_batches_to_blurb\.py$|^\.claude/skills/blurb/test_blurb_skill\.py$|^\.claude/skills/blurb/test_blurb_skill\.sh$'; then
+  needs_blurb_tests=1
+fi
+
+needs_blurb_pdf_tests=0
+if echo "$staged_paths" | grep -qE '^\.claude/skills/blurb-to-pdf/SKILL\.md$|^\.claude/skills/blurb-to-pdf/blurb_to_pdf\.py$|^\.claude/skills/blurb-to-pdf/test_blurb_to_pdf_skill\.py$|^\.claude/skills/blurb-to-pdf/test_blurb_to_pdf_skill\.sh$'; then
+  needs_blurb_pdf_tests=1
+fi
+
+if [[ "$needs_image_tests" -eq 0 && "$needs_image_batcher_tests" -eq 0 && "$needs_blurb_tests" -eq 0 && "$needs_blurb_pdf_tests" -eq 0 ]]; then
   exit 0
 fi
 
 if [[ "$needs_image_tests" -eq 1 ]]; then
   echo "pre-commit: detected image skill changes; running image test harness..."
   out_file="$(mktemp)"
-  if python3 .claude/skills/image/test_image_skill.py >"$out_file" 2>&1; then
+  if python3 .claude/skills/image-metadata-utils/test_image_metadata_utils.py >"$out_file" 2>&1; then
     sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
     rm -f "$out_file"
   else
@@ -46,6 +56,36 @@ if [[ "$needs_image_batcher_tests" -eq 1 ]]; then
     sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
     echo ""
     echo "pre-commit: image-batcher tests failed; commit blocked."
+    rm -f "$out_file"
+    exit 1
+  fi
+fi
+
+if [[ "$needs_blurb_tests" -eq 1 ]]; then
+  echo "pre-commit: detected blurb skill changes; running blurb test harness..."
+  out_file="$(mktemp)"
+  if python3 .claude/skills/blurb/test_blurb_skill.py >"$out_file" 2>&1; then
+    sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+    rm -f "$out_file"
+  else
+    sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+    echo ""
+    echo "pre-commit: blurb skill tests failed; commit blocked."
+    rm -f "$out_file"
+    exit 1
+  fi
+fi
+
+if [[ "$needs_blurb_pdf_tests" -eq 1 ]]; then
+  echo "pre-commit: detected blurb-to-pdf skill changes; running blurb-to-pdf test harness..."
+  out_file="$(mktemp)"
+  if python3 .claude/skills/blurb-to-pdf/test_blurb_to_pdf_skill.py >"$out_file" 2>&1; then
+    sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+    rm -f "$out_file"
+  else
+    sed -E 's/\x1b\[[0-9;]*m//g' "$out_file" | awk '/ PASS$| FAIL$| SKIP$|^Test summary:/'
+    echo ""
+    echo "pre-commit: blurb-to-pdf tests failed; commit blocked."
     rm -f "$out_file"
     exit 1
   fi
