@@ -25,3 +25,6 @@ __pycache__/
 
 # Blurb creation memory
 /tmp/blurb_last_create_options.json
+
+# Local machine/user Claude settings
+.claude/settings.local.json
