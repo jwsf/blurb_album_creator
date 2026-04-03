@@ -117,6 +117,68 @@ These are structural requirements of the .blurb format. Removing them creates in
 
 Templates are located in `references/templates/` directory.
 
+## Mandatory Input Gate (Create Operations)
+
+Before creating any new `.blurb` file, the assistant MUST collect all required inputs:
+
+1. Template (from `references/templates/`)
+2. Book title
+3. Author name
+
+Rules:
+- NEVER assume defaults for template, title, or author.
+- NEVER run create/copy/modify commands for new book creation until all 3 are provided.
+- If any field is missing, ask only for the missing fields and STOP.
+- If the user asks to proceed without required fields, refuse and explain these are mandatory inputs.
+
+Required prompt flow:
+1. List templates dynamically from `references/templates/` if template is not provided.
+2. Ask for template choice.
+3. Ask for title if missing.
+4. Ask for author if missing.
+5. Confirm all values in one line.
+6. Only then execute creation steps.
+
+## Last-Run Option Memory (Creation Defaults)
+
+To make repeated runs easier, persist the last confirmed create options to:
+
+- `/tmp/blurb_last_create_options.json`
+
+Expected schema:
+
+```json
+{
+    "template": "references/templates/FamilyBook-StandardLandscape.blurb",
+    "title": "My Album Title",
+    "author": "Author Name",
+    "saved_at": "2026-04-02T00:00:00Z"
+}
+```
+
+When handling a new create request:
+
+1. If the memory file exists, read it and offer:
+     - "Use last options" (template/title/author), or
+     - "Choose new options"
+2. Even when memory exists, require explicit user confirmation before using saved values.
+3. If the user chooses new options, run the mandatory input gate above.
+4. After successful creation, overwrite the memory file with the newly confirmed values.
+5. Do not silently reuse prior values without a user confirmation in the current request.
+
+## Default Directories
+
+Unless the user explicitly provides different paths:
+
+- Default source images directory: `inputs/`
+- Default output directory for created `.blurb` files: `outputs/`
+
+Directory handling requirements:
+
+- For create operations, always ensure the output directory exists before writing:
+    - `mkdir -p outputs`
+- For bulk image ingestion operations, use `inputs/` as the default source root when no source directory is specified.
+
 **IMPORTANT**:
 - **Always list available templates dynamically** by reading from the `references/templates/` directory
 - Do NOT hard-code template names in the skill - always read from the directory
@@ -131,6 +193,12 @@ Templates are located in `references/templates/` directory.
 - If the user doesn't specify an author, ask them for one
 - All created files should be placed in the `outputs/` directory unless the user specifies a different location
 - Create the `outputs/` directory if it doesn't exist
+
+## Anti-Patterns (Forbidden)
+
+- Choosing a template automatically without user selection or explicit "use last options" confirmation.
+- Reusing prior title/author without explicit confirmation in the current request.
+- Starting batch/image processing before required creation metadata is confirmed.
 
 **How to list available templates:**
 ```bash

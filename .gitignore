@@ -1,9 +1,12 @@
 # macOS
 .DS_Store
 
-# Large binary files and working directories
-inputs/
+# Working output directory
 outputs/
+
+# Track inputs/ directory, but ignore all image content
+inputs/**
+!inputs/.gitkeep
 
 # Large sample albums (keep only templates/)
 references/*.blurb
@@ -19,3 +22,6 @@ __pycache__/
 
 # Image batcher state
 /tmp/image_batcher_state.json
+
+# Blurb creation memory
+/tmp/blurb_last_create_options.json
