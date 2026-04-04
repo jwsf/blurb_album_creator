@@ -126,7 +126,7 @@ def check_blurb(path):
         title = (info.findtext("title") or "").strip()
         author = (info.findtext("author") or "").strip()
         if not title:
-            warn("Book title is empty")
+            err("Book title is empty")
         if not author:
             warn("Book author is empty")
     else:
@@ -157,14 +157,18 @@ def check_blurb(path):
             n = p.get("number", "")
             if n.lstrip("-").isdigit() and int(n) > 0:
                 positive_nums.append(int(n))
+                # Spread pages occupy two consecutive numbers; add the implied next page
+                if p.get("spread") == "true":
+                    positive_nums.append(int(n) + 1)
 
         if positive_nums:
-            expected = list(range(1, len(positive_nums) + 1))
+            sorted_nums = sorted(positive_nums)
+            expected = list(range(1, sorted_nums[-1] + 1))
             dupes = [n for n in positive_nums if positive_nums.count(n) > 1]
             if dupes:
                 err(f"Duplicate page numbers: {sorted(set(dupes))}")
-            elif sorted(positive_nums) != expected:
-                warn(f"Page numbers are not sequential 1–{len(positive_nums)}")
+            elif sorted_nums != expected:
+                warn(f"Page numbers are not sequential 1–{sorted_nums[-1]}")
 
     # ── 9. Image references ───────────────────────────────────────────────────
     image_elements = root.findall('.//section//container[@type="image"]/image')
@@ -177,10 +181,15 @@ def check_blurb(path):
         if "/" in src:
             err(f"Image src contains path separator: '{src}' (must be filename only)")
         else:
-            if f"images/{src}" not in archive_images:
+            if f"images/{src}" not in archive_images and src != "booklogo_interior.png":
                 err(f"Image '{src}' referenced in XML but not in archive")
         al = img.get("autolayout", "")
-        if al != "fill":
+        has_explicit_position = (
+            img.get("scale") not in (None, "1.0", "1")
+            or img.get("x") not in (None, "0")
+            or img.get("y") not in (None, "0")
+        )
+        if al != "fill" and not has_explicit_position:
             warn(f"Image '{src}' has autolayout='{al}' (expected 'fill')")
 
     # ── 10. Media registry ────────────────────────────────────────────────────

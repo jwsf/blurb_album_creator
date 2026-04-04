@@ -5,7 +5,7 @@
 3. **Archive version** — version is 4
 4. **Required files** — `bbf2.xml`, `project_settings.json`, `media_registry.xml` present
 5. **bbf2.xml structure** — parses as valid XML with `<book>` root
-6. **Metadata** — title and author are non-empty
+6. **Metadata** — title is non-empty (error); author is non-empty (warning)
 7. **Protected elements** — `<masterpage>` and all required `<cover>` types present
 8. **Page numbering** — content pages numbered sequentially without gaps or duplicates
 9. **Image references** — `src` is filename-only, images exist in archive, `autolayout="fill"` set

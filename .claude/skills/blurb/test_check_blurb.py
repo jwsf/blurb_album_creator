@@ -233,7 +233,7 @@ class TestHarness:
         finally:
             os.unlink(path)
 
-    def test_empty_title_is_warning(self):
+    def test_empty_title_is_error(self):
         with tempfile.NamedTemporaryFile(suffix=".blurb", delete=False) as f:
             path = f.name
         try:
@@ -242,9 +242,23 @@ class TestHarness:
                 "<title><![CDATA[]]></title>",
             )
             _make_blurb(path, bbf2=bbf2)
+            errors, _ = self.skill.check_blurb(path)
+            self.assert_has_error(errors, "title", "empty title should be an error")
+        finally:
+            os.unlink(path)
+
+    def test_empty_author_is_warning(self):
+        with tempfile.NamedTemporaryFile(suffix=".blurb", delete=False) as f:
+            path = f.name
+        try:
+            bbf2 = VALID_BBF2.replace(
+                "<author><![CDATA[Test Author]]></author>",
+                "<author><![CDATA[]]></author>",
+            )
+            _make_blurb(path, bbf2=bbf2)
             errors, warnings = self.skill.check_blurb(path)
-            self.assert_no_errors(errors, warnings, "empty title should only warn")
-            self.assert_has_warning(warnings, "title", "empty title warning")
+            self.assert_no_errors(errors, warnings, "empty author should only warn")
+            self.assert_has_warning(warnings, "author", "empty author warning")
         finally:
             os.unlink(path)
 
@@ -408,7 +422,8 @@ class TestHarness:
             ("Wrong archive version → warning only",        self.test_wrong_archive_version_is_warning),
             ("Missing required file → error",               self.test_missing_required_file),
             ("Invalid bbf2.xml → error",                    self.test_invalid_bbf2_xml),
-            ("Empty title → warning only",                  self.test_empty_title_is_warning),
+            ("Empty title → error",                          self.test_empty_title_is_error),
+            ("Empty author → warning only",                  self.test_empty_author_is_warning),
             ("Missing masterpage → error",                  self.test_missing_masterpage_is_error),
             ("Missing cover type → error",                  self.test_missing_cover_is_error),
             ("Image src with path → error",                 self.test_image_src_with_path_is_error),
