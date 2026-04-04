@@ -11,6 +11,7 @@ inputs/**
 # Large sample albums (keep only templates/)
 references/*.blurb
 references/*.pdf
+references/test_samples/
 
 # SQLite journal files (WAL mode)
 *.blurb-shm
