@@ -285,18 +285,25 @@ def fill_page_xml(page_xml, page_num, image_assignments):
                     container_xml
                 )
         else:
-            # No image element -- insert one before </container>
+            # No image element -- insert one into the container
             image_tag = (
                 f'<image guid="{guid}" src="{filename}" '
                 f'rotate="0" flip="none" x="0" y="0" scale="1.0" autolayout="fill"/>'
             )
-            container_xml = container_xml.replace('</container>', f'{image_tag}\n</container>')
+            if container_xml.rstrip().endswith('/>'):
+                # Self-closing container: convert to open/close form and insert image
+                container_xml = re.sub(r'/>\s*$', f'>\n{image_tag}\n</container>', container_xml)
+            else:
+                container_xml = container_xml.replace('</container>', f'{image_tag}\n</container>')
 
         return container_xml
 
-    # Process containers - match both self-closing and full containers
+    # Process containers - match both self-closing and full containers.
+    # IMPORTANT: The second [^>]*? must be LAZY. If greedy, it consumes the '/'
+    # in '/>' causing the alternation to fall through to '>.*?</container>',
+    # which then matches across multiple containers in the same page.
     page_xml = re.sub(
-        r'<container\b[^>]*type="image"[^>]*(?:/>|>.*?</container>)',
+        r'<container\b[^>]*type="image"[^>]*?(?:/>|>.*?</container>)',
         fill_image_container,
         page_xml,
         flags=re.DOTALL

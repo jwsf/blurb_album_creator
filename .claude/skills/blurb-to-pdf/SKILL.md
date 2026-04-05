@@ -1,6 +1,6 @@
 ---
 name: blurb-to-pdf
-description: Convert Bookwright .blurb files to PDF with covers, content pages, images, and text preserved
+description: Convert Bookwright .blurb files to PDF with covers, content pages, images, and text preserved. Use when the user asks for PDF output from a .blurb album.
 ---
 
 # Blurb To PDF Skill
