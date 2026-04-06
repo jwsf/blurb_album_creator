@@ -583,27 +583,55 @@ def convert_blurb_to_pdf(blurb_file):
                     cover_type_name = cover_type
                     break
 
-        # Fallback: If no covers found with standard types, look for ANY cover element
-        # Some albums use type="None" instead of specific cover types
+        # Fallback: covers have no type= attribute (only sku=).
+        # Use the book's own SKU to identify the preferred cover type, then
+        # find the matching cover.  Fall back to the first available cover.
         if front_cover is None and back_cover is None:
+            book_sku = book_elem.get('sku', '')
+            sku_preference = []
+            for sku_pat, ct_name in [("-IW-", "imagewrap"), ("-SC-", "softcover"), ("-DJ-", "dustjacket")]:
+                if sku_pat in book_sku:
+                    sku_preference.insert(0, (sku_pat, ct_name))
+                else:
+                    sku_preference.append((sku_pat, ct_name))
+
             covers = root.findall('.//cover')
-            for cover in covers:
-                # Check for coversheet format
+
+            def _try_cover(cover):
+                """Return (front, back, type_name) from a cover element, or (None, None, None)."""
                 coversheet = cover.find('coversheet')
                 if coversheet is not None:
-                    # Split coversheet into front and back covers
-                    front_cover, back_cover = split_coversheet(coversheet, page_width, page_height)
-                    cover_type_name = cover.get('type', 'unknown')
-                    break
-
-                # Check for separate front/back elements
+                    fc, bc = split_coversheet(coversheet, page_width, page_height)
+                    return fc, bc, cover.get('type', cover.get('sku', 'unknown'))
                 front = cover.find('front')
                 back = cover.find('back')
                 if front is not None or back is not None:
-                    front_cover = front
-                    back_cover = back
-                    cover_type_name = cover.get('type', 'unknown')
-                    break
+                    return front, back, cover.get('type', cover.get('sku', 'unknown'))
+                return None, None, None
+
+            # Try covers in SKU-preference order
+            cover_map = {}
+            for cover in covers:
+                sku = cover.get('sku', '')
+                for sku_pat, ct_name in sku_preference:
+                    if sku_pat in sku:
+                        cover_map[ct_name] = cover
+                        break
+
+            for _, ct_name in sku_preference:
+                if ct_name in cover_map:
+                    fc, bc, ctn = _try_cover(cover_map[ct_name])
+                    if fc is not None or bc is not None:
+                        front_cover, back_cover, cover_type_name = fc, bc, ct_name
+                        break
+
+            # Last resort: first cover with any content
+            if front_cover is None and back_cover is None:
+                for cover in covers:
+                    fc, bc, ctn = _try_cover(cover)
+                    if fc is not None or bc is not None:
+                        front_cover, back_cover, cover_type_name = fc, bc, ctn
+                        break
 
         # Calculate total pages to show progress (excluding inside covers)
         total_pages = 0
@@ -1041,10 +1069,13 @@ def process_text_container(c, container, page_height):
         used_height += item["line_height"]
     layout = truncated_layout
 
-    # Apply clipping to keep text within container bounds
+    # Apply clipping to keep text within container bounds.
+    # Extend the bottom of the clip rect by 3 points so that character
+    # descenders (which extend below the baseline) are not clipped when
+    # the last line's baseline sits near the container bottom.
     c.saveState()
     clip_path = c.beginPath()
-    clip_path.rect(x, pdf_y, width, height)
+    clip_path.rect(x, pdf_y - 3, width, height + 3)
     c.clipPath(clip_path, stroke=0)
 
     def draw_layout_lines(layout, origin_x, origin_y, area_width):
