@@ -1,6 +1,8 @@
 # Blurb Album Creator
 
-Automates the creation of [Blurb Bookwright](https://www.blurb.com/bookwright) photo albums from date-organised image folders. Images are batched by date and location, matched to orientation-aware template layouts, and written directly into a `.blurb` file ready to open in Bookwright.
+> This software is not created, supported, or endorsed by Blurb in any way.
+
+Rapidly creates [Blurb Bookwright](https://www.blurb.com/bookwright) photo albums from date-organised image folders, ready for subsequent editing and publishing using Blurb's official services. Images are batched by date and location, matched to orientation-aware template layouts, and written directly into a `.blurb` file ready to open in Bookwright.
 
 ## How It Works
 
@@ -26,8 +28,7 @@ inputs/                        Source images, organised by date folder
 outputs/                       Generated .blurb files (gitignored)
 
 references/
-  templates/                   Read-only source templates
-    2020 empty photo album.blurb
+  templates/                   Read-only source templates (not included — download from blurb.com/templates)
     FamilyBook-LargeLandscape.blurb
     ...
 
@@ -64,9 +65,9 @@ python3 .claude/skills/image-batcher/batcher.py init inputs/
 
 ```bash
 python3 .claude/skills/blurb/create_blurb.py \
-  --template "references/templates/2020 empty photo album.blurb" \
+  --template "references/templates/FamilyBook-StandardLandscape.blurb" \
   --title "2021 Photos" \
-  --author "Jonathan Wilson" \
+  --author "Your Name" \
   --output "outputs/2021 Photos 2026-04-04 08:43.blurb"
 ```
 
@@ -125,3 +126,7 @@ bash .claude/skills/image-metadata-utils/test_image_metadata_utils.sh
 ## Claude Code Integration
 
 This repo includes a [`CLAUDE.md`](CLAUDE.md) that instructs Claude Code to read all rules, skills, and workflows at the start of every session. When working with Claude Code in this project, it will automatically follow the documented conventions and use the existing skill scripts rather than writing one-off code.
+
+---
+
+*Blurb and Bookwright are registered trademarks of Blurb, Inc. This project is an independent tool and is not affiliated with, created by, supported by, or endorsed by Blurb, Inc.*

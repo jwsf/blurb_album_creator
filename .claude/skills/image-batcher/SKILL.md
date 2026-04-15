@@ -590,7 +590,7 @@ if __name__ == "__main__":
 python3 .claude/skills/image-batcher/batcher.py init inputs/
 
 # Output:
-# Scanning directory: /Users/jowilson/Code/blurb_album_creator/inputs
+# Scanning directory: /path/to/blurb_album_creator/inputs
 # Configuration: min=1, max=5, combine_singles=True, prefer_large=True
 #
 # Found 9 date folders
@@ -658,7 +658,7 @@ python3 .claude/skills/image-batcher/batcher.py get_batch
 python3 .claude/skills/image-batcher/batcher.py init inputs/ --max-batch 3 --no-combine-singles
 
 # Output:
-# Scanning directory: /Users/jowilson/Code/blurb_album_creator/inputs
+# Scanning directory: /path/to/blurb_album_creator/inputs
 # Configuration: min=1, max=3, combine_singles=False, prefer_large=True
 #
 # Found 9 date folders
@@ -763,7 +763,7 @@ python3 .claude/skills/image-batcher/batcher.py status
 
 # Output:
 # Status:
-#   Source: /Users/jowilson/Code/blurb_album_creator/inputs
+#   Source: /path/to/blurb_album_creator/inputs
 #   Total batches: 23
 #   Current batch: 4/23
 #   Completed: 3/23
@@ -782,7 +782,7 @@ python3 .claude/skills/image-batcher/batcher.py list_all
 
 # Output:
 # All Batches (23 total):
-# Source: /Users/jowilson/Code/blurb_album_creator/inputs
+# Source: /path/to/blurb_album_creator/inputs
 #
 # 2026-01-03 Window frames:
 #   Batch 1: 5 images

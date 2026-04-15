@@ -8,7 +8,10 @@ outputs/
 inputs/**
 !inputs/.gitkeep
 
-# Large sample albums (keep only templates/)
+# Template .blurb files are not distributed — download from blurb.com/templates
+references/templates/*.blurb
+references/templates/*.blurb-shm
+references/templates/*.blurb-wal
 references/*.blurb
 references/*.pdf
 references/test_samples/

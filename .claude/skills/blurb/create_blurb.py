@@ -10,8 +10,8 @@ Usage:
     python3 create_blurb.py --template <template.blurb> --title <title> \
                              --author <author> --output <output.blurb>
 
-    python3 create_blurb.py --template "references/templates/2020 empty photo album.blurb" \
-                             --title "2021 Photos" --author "Jonathan Wilson" \
+    python3 create_blurb.py --template "references/templates/FamilyBook-StandardLandscape.blurb" \
+                             --title "2021 Photos" --author "Your Name" \
                              --output "outputs/2021 Photos 2026-04-04 08:43.blurb"
 """
 
