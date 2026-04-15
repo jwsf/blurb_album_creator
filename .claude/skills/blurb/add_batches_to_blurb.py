@@ -16,6 +16,8 @@ import os
 import re
 import sys
 import json
+import shutil
+import tempfile
 import xml.etree.ElementTree as ET
 import subprocess
 import random
@@ -117,18 +119,19 @@ def assign_images_to_containers_by_orientation(batch_image_data, orientations):
     return [a for a in assignments if a is not None]
 
 
-def analyze_template(blurb_file):
+def analyze_template(blurb_file, tmpdir):
     """Analyze template pages using ElementTree (read-only).
 
     Returns template analysis data and the raw XML string for later string manipulation.
     """
+    bbf2_work = os.path.join(tmpdir, 'bbf2_work.xml')
     subprocess.run(
         ['sqlite3', blurb_file,
-         "SELECT writefile('/tmp/bbf2_work.xml', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
+         f"SELECT writefile('{bbf2_work}', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
         capture_output=True
     )
 
-    tree = ET.parse('/tmp/bbf2_work.xml')
+    tree = ET.parse(bbf2_work)
     root = tree.getroot()
     section = root.find('.//section[@name=""]')
     if section is None:
@@ -167,7 +170,7 @@ def analyze_template(blurb_file):
             max_existing = max(max_existing, int(pn))
 
     # Read raw XML for string-based manipulation
-    with open('/tmp/bbf2_work.xml', 'r', encoding='utf-8') as f:
+    with open(bbf2_work, 'r', encoding='utf-8') as f:
         raw_xml = f.read()
 
     # Extract raw XML strings for each template page (by page number)
@@ -322,7 +325,10 @@ def fill_page_xml(page_xml, page_num, image_assignments):
         text_elem = re.sub(r'(>)([^<]+)(<)', replace_visible, text_elem)
         return text_elem
 
-    # Also handle HTML-escaped text (ElementTree output format) - in case
+    # Second pass: handle HTML-escaped text (e.g. &gt;text&lt;), which appears when
+    # ElementTree has serialised the XML. The two passes are complementary: CDATA
+    # content uses >text< delimiters; escaped content uses &gt;text&lt;. Neither
+    # regex matches the other format, so the passes do not interfere.
     def replace_text_in_escaped(m):
         text_elem = m.group(0)
         def replace_visible(tm):
@@ -422,12 +428,22 @@ def process_all_batches(blurb_file):
         print("No batches to process")
         return
 
+    tmpdir = tempfile.mkdtemp(prefix='blurb_add_')
+
+    # Temp file paths — all inside tmpdir to avoid collisions with concurrent runs
+    bbf2_updated          = os.path.join(tmpdir, 'bbf2_updated.xml')
+    bbf2_verify           = os.path.join(tmpdir, 'bbf2_verify.xml')
+    media_registry        = os.path.join(tmpdir, 'media_registry.xml')
+    media_registry_updated = os.path.join(tmpdir, 'media_registry_updated.xml')
+    bbf2_final_check      = os.path.join(tmpdir, 'bbf2_final_check.xml')
+    media_registry_final  = os.path.join(tmpdir, 'media_registry_final.xml')
+
     total_images = sum(b['image_count'] for b in batches)
     print(f"Processing {len(batches)} batches with {total_images} images total")
     print()
 
     pages_by_count, page_profiles, page_numbers, max_existing, raw_xml, raw_pages = \
-        analyze_template(blurb_file)
+        analyze_template(blurb_file, tmpdir)
     available_sizes = set(pages_by_count.keys())
 
     print("Available template layouts:")
@@ -495,7 +511,8 @@ def process_all_batches(blurb_file):
                 )
 
                 if result.returncode != 0:
-                    print(f"    ERROR adding {os.path.basename(img_path)}: {result.stderr}")
+                    print(f"    ERROR adding {os.path.basename(img_path)}: {result.stderr.strip()}")
+                    print(f"    WARNING: Image skipped — this page will have fewer images than expected")
                     continue
 
                 verify_result = subprocess.run(
@@ -506,6 +523,7 @@ def process_all_batches(blurb_file):
 
                 if verify_result.stdout.strip() != '1':
                     print(f"    ERROR: Failed to verify {os.path.basename(img_path)} in archive")
+                    print(f"    WARNING: Image skipped — this page will have fewer images than expected")
                     continue
 
                 img_data = {
@@ -633,14 +651,14 @@ def process_all_batches(blurb_file):
     print(f"  Renumbered {total_pages} pages (1-{total_pages})")
 
     # Write the assembled XML
-    with open('/tmp/bbf2_updated.xml', 'w', encoding='utf-8') as f:
+    with open(bbf2_updated, 'w', encoding='utf-8') as f:
         f.write(raw_xml)
 
-    filesize = os.path.getsize('/tmp/bbf2_updated.xml')
+    filesize = os.path.getsize(bbf2_updated)
     print(f"Updated XML size: {filesize:,} bytes")
 
     # Verify page count (string-based, avoids ET.parse which can't handle CDATA)
-    with open('/tmp/bbf2_updated.xml', 'r', encoding='utf-8') as f:
+    with open(bbf2_updated, 'r', encoding='utf-8') as f:
         verify_xml = f.read()
     verify_count = len(re.findall(r'<page\b[^>]*\bnumber="\d+"', verify_xml))
     print(f"Pages in final XML: {verify_count}")
@@ -648,7 +666,7 @@ def process_all_batches(blurb_file):
     # Update archive with the string-assembled XML (preserves CDATA)
     result = subprocess.run(
         ['sqlite3', blurb_file,
-         f"UPDATE Files SET filecontent=readfile('/tmp/bbf2_updated.xml'), "
+         f"UPDATE Files SET filecontent=readfile('{bbf2_updated}'), "
          f"filesize={filesize}, filedate=datetime('now') WHERE filepath='bbf2.xml';"],
         capture_output=True, text=True
     )
@@ -658,20 +676,20 @@ def process_all_batches(blurb_file):
 
     # Verify archive update
     subprocess.run(['sqlite3', blurb_file,
-                   "SELECT writefile('/tmp/bbf2_verify.xml', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
+                   f"SELECT writefile('{bbf2_verify}', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
                   capture_output=True)
-    verify_size = os.path.getsize('/tmp/bbf2_verify.xml')
+    verify_size = os.path.getsize(bbf2_verify)
     print(f"Archive XML size: {verify_size:,} bytes (expected {filesize:,})")
 
     # Update media_registry.xml using string-based insertion
     print("\nUpdating media registry...")
     subprocess.run(
         ['sqlite3', blurb_file,
-         "SELECT writefile('/tmp/media_registry.xml', filecontent) FROM Files WHERE filepath='media_registry.xml';"],
+         f"SELECT writefile('{media_registry}', filecontent) FROM Files WHERE filepath='media_registry.xml';"],
         capture_output=True
     )
 
-    with open('/tmp/media_registry.xml', 'r', encoding='utf-8') as f:
+    with open(media_registry, 'r', encoding='utf-8') as f:
         mr_xml = f.read()
 
     # Truncate at first </medialist> to discard any trailing garbage
@@ -702,22 +720,18 @@ def process_all_batches(blurb_file):
         print(f"ERROR: media_registry.xml is not valid XML after update: {e}")
         sys.exit(1)
 
-    with open('/tmp/media_registry_updated.xml', 'w', encoding='utf-8') as f:
+    with open(media_registry_updated, 'w', encoding='utf-8') as f:
         f.write(mr_xml)
 
-    mr_size = os.path.getsize('/tmp/media_registry_updated.xml')
+    mr_size = os.path.getsize(media_registry_updated)
     subprocess.run(
         ['sqlite3', blurb_file,
-         f"UPDATE Files SET filecontent=readfile('/tmp/media_registry_updated.xml'), "
+         f"UPDATE Files SET filecontent=readfile('{media_registry_updated}'), "
          f"filesize={mr_size}, filedate=datetime('now') WHERE filepath='media_registry.xml';"],
         capture_output=True
     )
 
-    # Cleanup temp files
-    for f in ['/tmp/bbf2_work.xml', '/tmp/bbf2_updated.xml', '/tmp/bbf2_verify.xml',
-              '/tmp/media_registry.xml', '/tmp/media_registry_updated.xml']:
-        if os.path.exists(f):
-            os.remove(f)
+    # Cleanup intermediate temp files (tmpdir cleaned at end of process_all_batches)
 
     # Final verification
     print()
@@ -733,10 +747,10 @@ def process_all_batches(blurb_file):
     total_archive_count = int(archive_result.stdout.strip())
 
     subprocess.run(['sqlite3', blurb_file,
-                   "SELECT writefile('/tmp/bbf2_final_check.xml', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
+                   f"SELECT writefile('{bbf2_final_check}', filecontent) FROM Files WHERE filepath='bbf2.xml';"],
                   capture_output=True)
 
-    with open('/tmp/bbf2_final_check.xml', 'r', encoding='utf-8') as f:
+    with open(bbf2_final_check, 'r', encoding='utf-8') as f:
         final_xml = f.read()
 
     # Count all image refs in section pages
@@ -747,10 +761,10 @@ def process_all_batches(blurb_file):
         xml_ref_count += img_refs
 
     subprocess.run(['sqlite3', blurb_file,
-                   "SELECT writefile('/tmp/media_registry_final.xml', filecontent) FROM Files WHERE filepath='media_registry.xml';"],
+                   f"SELECT writefile('{media_registry_final}', filecontent) FROM Files WHERE filepath='media_registry.xml';"],
                   capture_output=True)
 
-    with open('/tmp/media_registry_final.xml', 'r', encoding='utf-8') as f:
+    with open(media_registry_final, 'r', encoding='utf-8') as f:
         mr_content = f.read()
     media_count = mr_content.count('<media ')
 
@@ -779,10 +793,8 @@ def process_all_batches(blurb_file):
 
     print("=" * 60)
 
-    # Cleanup verification files
-    for f in ['/tmp/bbf2_final_check.xml', '/tmp/media_registry_final.xml']:
-        if os.path.exists(f):
-            os.remove(f)
+    # Clean up all temp files at once
+    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == '__main__':

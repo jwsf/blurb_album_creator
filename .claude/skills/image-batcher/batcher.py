@@ -129,7 +129,10 @@ class ImageBatcher:
                 return {}
 
             import json
-            metadata_list = json.loads(result.stdout)
+            try:
+                metadata_list = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                return {}
 
             metadata_map = {}
             for item in metadata_list:
