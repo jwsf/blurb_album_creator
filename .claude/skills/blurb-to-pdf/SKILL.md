@@ -114,6 +114,43 @@ Output:
   its own box
 - True transparency for images with an alpha channel (e.g. clipart PNGs),
   preserved via a PDF soft mask rather than flattened onto a solid color
+- Bookwright's per-photo "Enhance" toggle (`<image enhance="true">`,
+  applied to most photos by default when added to a book) -- confirmed by
+  measuring photos directly against Blurb's own proof renders to be
+  dynamic-range COMPRESSION toward a central tone, not a stretch or a
+  flat brightness bump, and not even a one-directional brightening. A
+  photo that's dim throughout (e.g. a museum interior) comes back
+  substantially brighter overall (~+25%). A photo that already spans its
+  full tonal range (dark rocks under a bright overcast sky) comes back
+  with its sky pulled DOWN and its ground/foreground pulled UP
+  *simultaneously* (measured: sky 206.8->196.6, ground 111.8->120.3) --
+  and needs asymmetric treatment to match, since shadows get lifted
+  further than highlights get pulled down. `enhance="false"` photos, used
+  as a control, measured within 1% of their raw source, confirming this
+  is real signal and not measurement noise.
+
+  Approximated with a fixed piecewise-gamma tone curve pivoting at 128 --
+  a shallower gamma below the pivot (shadows/midtones lifted further) and
+  a steeper one above it (highlights pulled toward the pivot more
+  gently) -- plus a saturation boost to compensate for the curve's
+  desaturating side effect (applying the same nonlinear curve
+  independently to R, G, and B brings a pixel's channels closer together,
+  reducing saturation). Unlike an autocontrast- or percentile-based
+  approach, this curve is a fixed function of input value alone, not
+  recomputed per image -- tuned once against a 19-photo sample (matching
+  Bookwright's measured brightness AND saturation shift) plus the
+  sky/ground example above. This is an approximation of the general
+  effect, not Bookwright's actual (proprietary, unspecified in the
+  archive) algorithm -- don't expect a pixel-for-pixel match.
+
+  For an image with transparency (a die-cut/cutout PNG on a transparent
+  field, common for clipart and torn-edge photo treatments), the curve is
+  only ever applied where alpha is meaningfully opaque (>=~78%,
+  compositing the curved and uncurved versions together) -- a
+  mostly-transparent image's soft, dark, partially-transparent edge would
+  otherwise get brightened enough to turn from invisible-when-blended
+  into a visible halo around the cutout, the same failure mode a
+  statistics-based approach hit here before this one replaced it
 
 ## What Is Excluded
 
