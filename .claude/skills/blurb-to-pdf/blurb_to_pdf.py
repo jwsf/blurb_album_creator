@@ -1055,6 +1055,73 @@ def _rotation_angle_from_transform(transform):
     return rotation_angle
 
 
+# Bookwright's per-photo "Enhance" doesn't just brighten dark photos --
+# measured directly against Blurb's own proof renders, a photo that
+# already spans its full tonal range (dark rocks to bright overcast sky)
+# comes back with its SKY PULLED DOWN and its GROUND/foreground PULLED UP
+# *simultaneously* (sky 206.8->196.6, ground 111.8->120.3 in one measured
+# example), while a photo that's dim throughout (e.g. a museum interior)
+# comes back substantially brighter overall (~+25%). That's dynamic-range
+# COMPRESSION toward a central tone, not a stretch or a flat brightness
+# bump -- and it needs asymmetric treatment (shadows lifted more
+# aggressively than highlights are pulled down) to match, since a single
+# symmetric curve moving both ends toward the middle by the same amount
+# undershoots how much darker photos get lifted.
+#
+# This LUT implements that: a piecewise gamma curve pivoting at 128,
+# using a shallower gamma below the pivot (shadows/midtones lifted
+# further) and a slightly less aggressive one above it (highlights pulled
+# down more gently) -- unlike the shadow-only, image-adaptive gamma this
+# replaced, this curve is a fixed function of input value alone, tuned
+# once against 19 sample photos (matching Bookwright's measured
+# brightness AND saturation shift) plus the sky/ground example above, not
+# recomputed per image. Applying the same nonlinear curve independently
+# to R, G, and B reduces saturation as a side effect (compressing a
+# pixel's channels toward the pivot brings them closer together) --
+# corrected by the saturation boost applied alongside it below.
+#
+# That boost was initially set to 1.8 to match Bookwright's own measured
+# saturation increase against its proof PDF -- but the proof is itself a
+# low-quality, heavily-compressed preview (its own words: "not optimized
+# for high quality printing or digital distribution"), and 1.8 looked
+# visibly over-saturated in the actual output despite fitting that
+# number. The boost needed just to CANCEL the curve's own desaturation
+# back to the original photo's own saturation varies per image (measured
+# 1.1-1.6 across a few samples, since how hard the curve pulls a pixel
+# toward the pivot depends on how far from the pivot it started) -- 1.3
+# sits below that neutral range on average, a deliberately modest boost
+# rather than trying to match the proof's own number.
+_ENHANCE_PIVOT = 128
+_ENHANCE_GAMMA_SHADOW = 0.55
+_ENHANCE_GAMMA_HIGHLIGHT = 0.65
+_ENHANCE_SATURATION_BOOST = 1.3
+
+
+def _build_enhance_lut():
+    lut = []
+    p = _ENHANCE_PIVOT
+    for i in range(256):
+        if i <= p:
+            v = p * ((i / p) ** _ENHANCE_GAMMA_SHADOW) if p > 0 else i
+        else:
+            u = (255 - i) / (255 - p) if p < 255 else 0
+            v = 255 - (255 - p) * (u ** _ENHANCE_GAMMA_HIGHLIGHT)
+        lut.append(int(max(0, min(255, v))))
+    return lut * 3  # same curve on R, G, and B
+
+
+_ENHANCE_LUT = _build_enhance_lut()
+
+
+def _apply_enhance_curve(img):
+    """Apply Bookwright-"Enhance" approximation: the pivot tone curve
+    above, then a saturation boost to compensate for its desaturating
+    side effect. img must already be in RGB mode (no alpha band)."""
+    from PIL import ImageEnhance
+    curved = img.point(_ENHANCE_LUT)
+    return ImageEnhance.Color(curved).enhance(_ENHANCE_SATURATION_BOOST)
+
+
 def process_image_container(c, container, blurb_file, page_height):
     """Process an image container and draw image on PDF matching .blurb positioning exactly."""
     # Get container dimensions and position
@@ -1136,6 +1203,34 @@ def process_image_container(c, container, blurb_file, page_height):
         # as PNG so ReportLab builds a soft mask (SMask) from the alpha
         # channel, so whatever is underneath in the PDF shows through.
         has_alpha = img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info)
+
+        # Bookwright's "Enhance" (<image enhance="true">) -- see the
+        # _ENHANCE_LUT block above for what this approximates and why.
+        if image_elem.get('enhance') == 'true':
+            if has_alpha:
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                alpha = img.getchannel('A')
+                rgb = img.convert('RGB')
+                enhanced_rgb = _apply_enhance_curve(rgb)
+                # A die-cut/cutout PNG (an irregular shape on a
+                # transparent field, common for clipart and torn-edge
+                # photo treatments) can be MOSTLY transparent by pixel
+                # count, with a soft, anti-aliased, partially-transparent
+                # edge whose underlying RGB is dark (blending toward
+                # black). The enhance curve is no longer measured from
+                # the image's own statistics, but it would still happily
+                # brighten that dark edge if applied to it, turning a
+                # border that's invisible when blended at low opacity
+                # into a visible halo around the cutout. Composite so the
+                # curve only applies to meaningfully-opaque content (alpha
+                # >= ~78%); a transparent or barely-visible edge pixel
+                # keeps its original RGB untouched.
+                opaque_mask = alpha.point(lambda a: 255 if a >= 200 else 0)
+                img = PILImage.composite(enhanced_rgb, rgb, opaque_mask).convert('RGBA')
+                img.putalpha(alpha)
+            else:
+                img = _apply_enhance_curve(img.convert('RGB'))
 
         img_buffer = BytesIO()
         if has_alpha:
