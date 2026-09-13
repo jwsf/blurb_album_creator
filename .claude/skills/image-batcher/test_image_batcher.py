@@ -111,6 +111,14 @@ class TestHarness:
         self.make_jpeg(self.test_root / "flat/cat_002.jpg")
         self.make_jpeg(self.test_root / "flat/sub/dog_001.jpg")
 
+        # Mixed date / non-date folder fixtures (regression: non-date-named
+        # folders must not be silently dropped)
+        (self.test_root / "mixed/2026-02-01").mkdir(parents=True, exist_ok=True)
+        (self.test_root / "mixed/Misc").mkdir(parents=True, exist_ok=True)
+        self.make_jpeg(self.test_root / "mixed/2026-02-01/a.jpg")
+        self.make_jpeg(self.test_root / "mixed/Misc/b.jpg")
+        self.make_jpeg(self.test_root / "mixed/Misc/c.jpg")
+
     def test_prereq_exiftool_present(self) -> None:
         if not self.check_exiftool():
             raise AssertionError("Expected exiftool to be present")
@@ -121,9 +129,20 @@ class TestHarness:
 
     def test_init_date_mode_creates_batches(self) -> None:
         result = self.run_batcher("init", str(self.test_root / "dated"), "--max-batch", "2")
-        self.assert_contains(result.stdout, "Found 2 date folders", "Date mode should detect date folders")
+        self.assert_contains(result.stdout, "Found 2 folders", "Date mode should detect all folders")
         state = self.load_state()
         self.assert_eq("2", str(state["total_batches"]), "Expected 2 batches in date-folder mode")
+
+    def test_non_date_folder_not_dropped(self) -> None:
+        result = self.run_batcher("init", str(self.test_root / "mixed"), "--max-batch", "5")
+        self.assert_contains(
+            result.stdout,
+            "Found 2 folders (1 date-named, 1 other)",
+            "Expected both the date-named and non-date-named folders to be detected",
+        )
+        state = self.load_state()
+        total_images = sum(b["image_count"] for b in state["batches"])
+        self.assert_eq("3", str(total_images), "Images inside non-date-named folders must not be dropped")
 
     def test_get_batch_returns_current(self) -> None:
         result = self.run_batcher("get_batch")
@@ -171,6 +190,7 @@ class TestHarness:
         self.run_test("Prereq exiftool present", self.test_prereq_exiftool_present)
         self.run_test("Prereq sips present", self.test_prereq_sips_present)
         self.run_test("Init date mode creates batches", self.test_init_date_mode_creates_batches)
+        self.run_test("Non-date folder not dropped", self.test_non_date_folder_not_dropped)
         self.run_test("Get batch returns current", self.test_get_batch_returns_current)
         self.run_test("Get next batch advances", self.test_get_next_batch_advances)
         self.run_test("Reset returns to first", self.test_reset_returns_to_first)

@@ -129,7 +129,10 @@ class ImageBatcher:
                 return {}
 
             import json
-            metadata_list = json.loads(result.stdout)
+            try:
+                metadata_list = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                return {}
 
             metadata_map = {}
             for item in metadata_list:
@@ -278,20 +281,32 @@ class ImageBatcher:
         # Find all subdirectories
         root_path = Path(directory)
 
-        # Get all immediate subdirectories that start with dates
-        date_folders = []
-        for item in sorted(root_path.iterdir()):
-            if item.is_dir() and self.is_date_folder(item.name):
-                date_folders.append(item)
+        # Get all immediate subdirectories. If none of them are date-named,
+        # this directory is fully unstructured, so fall back to recursive
+        # flat-directory mode (matches images placed loose at the root too).
+        # Otherwise we're in date-folder mode: every immediate subdirectory
+        # is processed, not just the date-named ones — folders with other
+        # names (e.g. "Misc" catch-all folders) are still processed using
+        # their own name as the label, so images inside them are never
+        # silently dropped.
+        all_subfolders = [item for item in sorted(root_path.iterdir()) if item.is_dir()]
+        date_named_folders = [f for f in all_subfolders if self.is_date_folder(f.name)]
 
-        if not date_folders:
+        if not date_named_folders:
             print("No date folders found (folders starting with YYYY-MM-DD pattern)")
             print("Falling back to flat-directory mode: scanning all images recursively")
             print()
             self._scan_flat_directory(directory)
             return
 
-        print(f"Found {len(date_folders)} date folders")
+        date_folders = all_subfolders
+        non_date_folders = [f for f in date_folders if not self.is_date_folder(f.name)]
+        print(f"Found {len(date_folders)} folders "
+              f"({len(date_named_folders)} date-named, {len(non_date_folders)} other)")
+        if non_date_folders:
+            print("Non-date-named folders (processed using folder name as label):")
+            for f in non_date_folders:
+                print(f"  - {f.name}")
         self.stats['total_date_folders'] = len(date_folders)
         print()
 
