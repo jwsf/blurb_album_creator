@@ -137,11 +137,22 @@ Output:
   independently to R, G, and B brings a pixel's channels closer together,
   reducing saturation). Unlike an autocontrast- or percentile-based
   approach, this curve is a fixed function of input value alone, not
-  recomputed per image -- tuned once against a 19-photo sample (matching
-  Bookwright's measured brightness AND saturation shift) plus the
-  sky/ground example above. This is an approximation of the general
+  recomputed per image -- the gamma values are tuned once against a
+  19-photo sample (matching Bookwright's measured brightness shift) plus
+  the sky/ground example above. This is an approximation of the general
   effect, not Bookwright's actual (proprietary, unspecified in the
   archive) algorithm -- don't expect a pixel-for-pixel match.
+
+  The saturation boost specifically is *not* tuned to that same sample:
+  the number that best matched Bookwright's own measured saturation
+  increase there (1.8x) looked visibly over-saturated in real output, and
+  was dialed down by direct visual review instead (to 1.3x, below the
+  amount needed to fully cancel the curve's own desaturation). The
+  sample's saturation numbers came from Blurb's proof PDF, which is
+  itself a low-quality, heavily-compressed preview -- treat its
+  brightness numbers as reliable but its saturation numbers with
+  suspicion, and prefer a real visual check over fitting to them if the
+  two disagree again.
 
   For an image with transparency (a die-cut/cutout PNG on a transparent
   field, common for clipart and torn-edge photo treatments), the curve is
